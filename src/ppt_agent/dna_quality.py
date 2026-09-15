@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterator
 
 
 REQUIRED_PRESENTATION_KEYS = ("schema", "presentation", "slides", "masters", "theme")
 REQUIRED_SLIDE_KEYS = ("slide", "role", "shapes")
 REQUIRED_SHAPE_KEYS = ("id", "type", "geometry", "style", "fidelity")
+
+
+def _walk_shapes(shapes: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    for shape in shapes:
+        yield shape
+        yield from _walk_shapes(shape.get("children") or [])
 
 
 def inspect_dna(dna: dict[str, Any]) -> dict[str, Any]:
@@ -36,7 +42,7 @@ def inspect_dna(dna: dict[str, Any]) -> dict[str, Any]:
             report["issues"].append({"slide": slide.get("slide"), "missing": missing})
         role = str(slide.get("role") or "unknown")
         report["roles"][role] = report["roles"].get(role, 0) + 1
-        for shape in slide.get("shapes") or []:
+        for shape in _walk_shapes(slide.get("shapes") or []):
             report["shape_count"] += 1
             shape_id = shape.get("id")
             if shape_id is None:
