@@ -37,9 +37,6 @@ def _text_value(shape: dict[str, Any]) -> str | None:
 def _component(shape: dict[str, Any], source: str) -> Component:
     geometry = shape.get("geometry") or {}
     style = shape.get("style") or {}
-    # Preserve source fidelity instead of flattening it away. This includes
-    # alpha/transparency, z-order, parent/child relationships, placeholders,
-    # and the raw OOXML fingerprint captured by Template DNA.
     fidelity = {
         "z_index": shape.get("z_index", shape.get("z_order")),
         "z_order": shape.get("z_order", shape.get("z_index")),
@@ -89,7 +86,7 @@ def template_dna_to_ir(dna: dict[str, Any], *, source: str | None = None) -> Pre
                     "inheritance": raw_slide.get("inheritance"),
                     "layout_signature": raw_slide.get("layout_signature"),
                     "raw_slide_xml": raw_slide.get("raw_slide_xml"),
-                } if hasattr(Slide, "data") else None,
+                },
             )
         )
 
