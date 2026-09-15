@@ -35,10 +35,8 @@ def sample_pptx(tmp_path: Path) -> Path:
     text.text_frame.paragraphs[0].runs[0].font.name = "Aptos"
     text.text_frame.paragraphs[0].runs[0].font.size = pptx.util.Pt(28)
 
-    body = prs.slides.add_slide(prs.slide_layouts[0])
-    body.shapes.add_textbox(100000, 100000, 1000000, 500000).text_frame.text = "Body"
-    last = prs.slides.add_slide(prs.slide_layouts[0])
-    last.shapes.add_textbox(100000, 100000, 1000000, 500000).text_frame.text = "End"
+    prs.slides.add_slide(prs.slide_layouts[0]).shapes.add_textbox(100000, 100000, 1000000, 500000).text_frame.text = "Body"
+    prs.slides.add_slide(prs.slide_layouts[0]).shapes.add_textbox(100000, 100000, 1000000, 500000).text_frame.text = "End"
 
     out = tmp_path / "sample.pptx"
     prs.save(out)
@@ -59,9 +57,10 @@ def test_template_dna_captures_semantics(sample_pptx: Path):
     assert first_shapes[0]["z_index"] == 0
     assert first_shapes[1]["z_index"] == 1
     assert first_shapes[2]["z_index"] == 2
-    assert first_shapes[1]["style"]["fill"]["rgb"] == "FF0000"
-    assert first_shapes[2]["style"]["fill"]["transparency"] == pytest.approx(0.35, abs=0.01)
-    assert first_shapes[2]["geometry"]["width"] > 0
+    assert first_shapes[0]["style"]["fill"]["rgb"] == "FF0000"
+    assert first_shapes[1]["style"]["fill"]["rgb"] == "00FF00"
+    assert first_shapes[1]["style"]["fill"]["transparency"] == pytest.approx(0.35, abs=0.01)
+    assert first_shapes[1]["geometry"]["width"] > 0
     assert any(f[0] == "Aptos" for f in dna["global_style_statistics"]["fonts"])
     assert dna["theme"]["colors"]
     assert dna["masters"]
