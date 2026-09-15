@@ -14,7 +14,11 @@ def test_template_dna_to_ir_preserves_slide_roles_and_fidelity():
                 "slide": 1,
                 "role": "first",
                 "layout_name": "Title Slide",
-                "shapes": [
+                "background": {"fill": {"rgb": "112233", "alpha": 0.8}},
+                "inheritance": {"master": "Master 1", "layout": "Title Slide"},
+                "layout_signature": "sig-first",
+                "raw_slide_xml": "<p:sld/>"
+                ,"shapes": [
                     {
                         "id": "10",
                         "name": "Title",
@@ -44,4 +48,9 @@ def test_template_dna_to_ir_preserves_slide_roles_and_fidelity():
     assert component.style["fill"]["alpha"] == 0.4
     assert component.data["fidelity"]["z_index"] == 4
     assert component.data["fidelity"]["parent_id"] == "group-1"
+    assert presentation.slides[0].data["role"] == "first"
+    assert presentation.slides[0].data["background"]["fill"]["alpha"] == 0.8
+    assert presentation.slides[0].data["inheritance"]["master"] == "Master 1"
+    assert presentation.slides[0].data["layout_signature"] == "sig-first"
+    assert presentation.slides[0].data["raw_slide_xml"] == "<p:sld/>"
     assert presentation.theme["masters"][0]["name"] == "Master 1"
