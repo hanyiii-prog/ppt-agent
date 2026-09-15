@@ -70,17 +70,18 @@ def _shape_nodes(shapes: Iterable[dict[str, Any]], *, source: str = "slide") -> 
 def build_scene_graph(shapes: Iterable[dict[str, Any]], *, source: str = "slide") -> SceneGraph:
     nodes, edges = _shape_nodes(shapes, source=source)
     ids = {node.id for node in nodes}
-    for node in nodes:
-        if node.parent_id is None or node.parent_id not in ids:
-            if node.id not in {root for root in [edge.target for edge in edges if edge.relation == "contains"]}:
-                pass
     roots = [node.id for node in nodes if node.parent_id is None or node.parent_id not in ids]
 
-    # Preserve the exact stacking sequence as explicit edges. Do not infer
-    # visual overlap: z-order is the authoritative PPT drawing order.
-    ordered = sorted((n for n in nodes if n.z_index is not None), key=lambda n: (n.z_index, n.order))
-    for lower, upper in zip(ordered, ordered[1:]):
-        edges.append(GraphEdge(lower.id, upper.id, "below", upper.z_index))
+    # A z-order edge is only emitted between nodes in the same stacking
+    # context. Nested group children do not compete with unrelated siblings.
+    contexts: dict[str | None, list[GraphNode]] = {}
+    for node in nodes:
+        contexts.setdefault(node.parent_id, []).append(node)
+    for siblings in contexts.values():
+        ordered = sorted((n for n in siblings if n.z_index is not None), key=lambda n: (n.z_index, n.order))
+        for lower, upper in zip(ordered, ordered[1:]):
+            edges.append(GraphEdge(lower.id, upper.id, "below", upper.z_index))
+
     return SceneGraph(nodes=nodes, edges=edges, roots=roots)
 
 
