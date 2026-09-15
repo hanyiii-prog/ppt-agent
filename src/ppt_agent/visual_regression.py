@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass
@@ -48,9 +49,21 @@ def _run(cmd: list[str]) -> None:
         raise RuntimeError(f"command failed: {' '.join(cmd)}\n{detail}") from exc
 
 
+def _prepare_output_dir(output_dir: Path) -> None:
+    """Remove stale renders so a previous larger deck cannot affect page counts."""
+    if output_dir.exists():
+        for child in output_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    else:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+
 def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144) -> list[Path]:
     """Render a PPTX to one PNG per slide using LibreOffice + pdftoppm."""
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _prepare_output_dir(output_dir)
     with tempfile.TemporaryDirectory(prefix="ppt-agent-render-") as tmp:
         tmp_path = Path(tmp)
         _run(["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", str(tmp_path), str(pptx)])
