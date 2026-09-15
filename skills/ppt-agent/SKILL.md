@@ -12,11 +12,17 @@ Use PPT Agent as the presentation-engineering layer for an AI agent. The host ag
 4. **Create Universal Presentation IR** as the source of truth.
 5. **Analyze/apply Template DNA** when a reference deck is supplied.
 6. **Build deterministically** with a supported renderer.
-7. **Render and inspect** geometry, content density, readability and visual consistency.
-8. **Run visual fidelity regression** on representative reference surfaces (especially cover, closing and high-complexity layouts). When a reference PPTX is being learned, reconstruct at least one representative slide from DNA and compare rendered output against the reference before declaring Template DNA correct.
-9. **Run quality gates**. Failed gates block delivery.
-10. **Repair the source/IR/rules**, rebuild, rerender and recheck. Do not hide defects with untracked final-file patches.
+7. **Render the complete deck** before delivery. Never validate only a sample page.
+8. **Run a per-page production gate** on every slide: render success, page count, dimensions, bounds/overflow, zero-size or broken elements, near-blank detection, readability/density checks, and visual consistency.
+9. **Run visual fidelity regression** whenever a reference deck or known-good baseline exists. Compare **every page**, not only representative pages. A single failed page blocks delivery.
+10. **Repair the source/IR/rules**, rebuild, rerender and recheck the whole deck. Repeat until every page passes or the task is explicitly stopped. Do not hide defects with untracked final-file patches.
 11. **Deliver** only the validated presentation and its manifest/evidence artifacts when requested.
+
+The production loop is therefore:
+
+`Plan → Build → Render all pages → Page Gates → Visual Critic → Repair → Rebuild → Render all pages → Page Gates → Final Delivery`
+
+This same loop is used both for development/regression testing and for the final user-facing PPT generation. Development tests prove the machinery works; production validation proves the actual requested deck is acceptable.
 
 ## Template DNA requirements
 
@@ -47,7 +53,8 @@ Use the OOXML fidelity layer as an escape hatch when `python-pptx` or another hi
 - Avoid repetitive card grids when the content does not justify them; choose layouts from content semantics and template grammar.
 - Preserve editability for native PPTX elements whenever the chosen renderer supports it.
 - Host agents are adapters. Do not make core presentation logic dependent on a single model or platform.
-- A script that exits successfully is **not** sufficient visual validation. Rendered visual comparison is required for template-learning changes.
+- A script that exits successfully is **not** sufficient visual validation. A rendered deck must pass the per-page production gate before delivery.
+- If visual regression is enabled, **zero failed pages is the release criterion**. Aggregate averages must never hide a bad slide.
 
 ## Capability routing
 
@@ -59,6 +66,8 @@ If the host exposes a native PPTX or Office capability, use it where it material
 ppt-agent markdown-to-ir input.md -o workspace/presentation.json
 ppt-agent analyze-pptx reference.pptx -o workspace/template-dna.json
 ppt-agent qa-ir workspace/presentation.json
+ppt-agent validate-pptx output.pptx -o workspace/page-gate.json
+ppt-agent visual-regression reference.pptx output.pptx -o workspace/visual-report.json
 ```
 
-V0.1 does not claim to be a full PPTX generator yet; later releases add native rendering, visual critique and automatic repair.
+V0.1 now includes the foundation of the per-page render/validation loop. Later releases will connect the page gate to the Visual Critic and automatic Repair Agent so the final generation loop can repair failed pages autonomously.
