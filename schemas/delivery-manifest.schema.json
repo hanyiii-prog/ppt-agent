@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hanyiii-prog/ppt-agent/blob/main/schemas/delivery-manifest.schema.json",
+  "title": "PPT Agent Delivery Manifest",
+  "type": "object",
+  "required": ["schema_version", "candidate", "passed", "iterations", "pages"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "candidate": {"type": "string"},
+    "reference": {"type": ["string", "null"]},
+    "passed": {"type": "boolean"},
+    "iterations": {"type": "integer", "minimum": 1},
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["page", "passed", "gates"],
+        "properties": {
+          "page": {"type": "integer", "minimum": 1},
+          "role": {"type": "string", "enum": ["first", "chapter", "body", "last", "unknown"]},
+          "passed": {"type": "boolean"},
+          "gates": {
+            "type": "object",
+            "properties": {
+              "structure": {"type": "boolean"},
+              "critic": {"type": "boolean"},
+              "visual_regression": {"type": ["boolean", "null"]}
+            },
+            "additionalProperties": true
+          },
+          "findings": {"type": "array", "items": {"type": "object"}},
+          "artifacts": {"type": "object", "additionalProperties": {"type": "string"}}
+        },
+        "additionalProperties": true
+      }
+    },
+    "attempts": {"type": "array", "items": {"type": "object"}}
+  },
+  "additionalProperties": true
+}
