@@ -34,6 +34,7 @@ class Slide:
     layout: str | None = None
     components: list[Component] = field(default_factory=list)
     speaker_notes: str | None = None
+    data: Any = None
 
 
 @dataclass
