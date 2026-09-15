@@ -74,7 +74,8 @@
         "claim": {"type": "string"},
         "layout": {"type": "string"},
         "components": {"type": "array", "items": {"$ref": "#/$defs/component"}},
-        "speaker_notes": {"type": "string"}
+        "speaker_notes": {"type": "string"},
+        "data": {}
       },
       "additionalProperties": true
     }
