@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ppt-agent"
+version = "0.1.0"
+description = "Portable agent-native presentation engineering framework"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+ppt-agent = "ppt_agent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ppt_agent"]
