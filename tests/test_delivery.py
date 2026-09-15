@@ -20,11 +20,11 @@ def test_repair_loop_rebuilds_until_page_gate_passes(tiny_deck: Path, tmp_path: 
 
     def fake_validate(pptx, workspace, **kwargs):
         from ppt_agent.page_validation import DeckGateReport, PageGate
-        from ppt_agent.visual_regression import VisualReport
+        from ppt_agent.visual_critic import CriticReport
         calls.append((pptx, workspace))
         passed = len(calls) >= 2
         page = PageGate(1, 1, 0, 0, 320, 180, 0.0, passed, [] if passed else ["synthetic failure"])
-        return DeckGateReport(passed, 1, [page]), None
+        return DeckGateReport(passed, 1, [page]), CriticReport(True), None
 
     monkeypatch.setattr("ppt_agent.delivery.validate_delivery", fake_validate)
 
@@ -46,8 +46,9 @@ def test_repair_loop_rebuilds_until_page_gate_passes(tiny_deck: Path, tmp_path: 
 def test_repair_loop_blocks_delivery_after_limit(tiny_deck: Path, tmp_path: Path, monkeypatch):
     def fake_validate(pptx, workspace, **kwargs):
         from ppt_agent.page_validation import DeckGateReport, PageGate
+        from ppt_agent.visual_critic import CriticReport
         page = PageGate(2, 1, 1, 0, 320, 180, 0.0, False, ["out of bounds"])
-        return DeckGateReport(False, 1, [page]), None
+        return DeckGateReport(False, 1, [page]), CriticReport(True), None
 
     monkeypatch.setattr("ppt_agent.delivery.validate_delivery", fake_validate)
     report = run_repair_loop(
