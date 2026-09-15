@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
+import json
 
 
-@dataclass
+@dataclass(frozen=True)
 class Provenance:
     source_id: str
     locator: str | None = None
@@ -46,23 +47,43 @@ class Presentation:
     sources: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        def convert(value: Any) -> Any:
-            if hasattr(value, "__dataclass_fields__"):
-                return {k: convert(v) for k, v in value.__dict__.items()}
-            if isinstance(value, list):
-                return [convert(v) for v in value]
-            if isinstance(value, dict):
-                return {k: convert(v) for k, v in value.items()}
-            return value
-
-        return {
-            "version": self.version,
-            "metadata": {
-                "title": self.title,
-                "audience": self.audience,
-                "objective": self.objective,
-            },
-            "theme": convert(self.theme),
-            "sources": convert(self.sources),
-            "slides": convert(self.slides),
+        data = asdict(self)
+        data["metadata"] = {
+            "title": self.title,
+            "audience": self.audience,
+            "objective": self.objective,
         }
+        data.pop("title", None)
+        data.pop("audience", None)
+        data.pop("objective", None)
+        return data
+
+    def to_json(self, *, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
+
+
+def validate_presentation(data: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for key in ("version", "metadata", "slides"):
+        if key not in data:
+            errors.append(f"missing required field: {key}")
+    if not isinstance(data.get("slides"), list):
+        errors.append("slides must be an array")
+        return errors
+    if not isinstance(data.get("metadata"), dict):
+        errors.append("metadata must be an object")
+    for i, slide in enumerate(data["slides"]):
+        if not isinstance(slide, dict):
+            errors.append(f"slides[{i}] must be an object")
+            continue
+        for key in ("id", "purpose"):
+            if not slide.get(key):
+                errors.append(f"slides[{i}] missing {key}")
+        components = slide.get("components", [])
+        if not isinstance(components, list):
+            errors.append(f"slides[{i}].components must be an array")
+            continue
+        for j, component in enumerate(components):
+            if not isinstance(component, dict) or not component.get("type"):
+                errors.append(f"slides[{i}].components[{j}] missing type")
+    return errors
