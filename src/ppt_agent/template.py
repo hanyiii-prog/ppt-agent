@@ -31,6 +31,15 @@ def _xml_alpha(element: Any) -> int | None:
     return None
 
 
+def _xml_alpha_from_shape(shape: Any) -> int | None:
+    try:
+        xml = shape._element.xml
+    except Exception:
+        return None
+    match = re.search(r"<a:alpha(?:ModFix|Off)?[^>]*val=[\"'](\d+)[\"']", xml)
+    return int(match.group(1)) if match else None
+
+
 def _fill_info(shape: Any) -> dict[str, Any]:
     fill = getattr(shape, "fill", None)
     if fill is None:
@@ -46,23 +55,30 @@ def _fill_info(shape: Any) -> dict[str, Any]:
             info["rgb"] = rgb
     except Exception:
         pass
+    alpha = None
     try:
         sp_pr = shape._element.spPr
         solid = sp_pr.find(f"{{{A_NS}}}solidFill")
         if solid is not None:
             color = next(iter(solid), None)
             alpha = _xml_alpha(color) if color is not None else None
-            if alpha is not None:
-                info["alpha"] = alpha
-                info["opacity"] = round(alpha / 100000, 4)
-                info["transparency"] = round(1 - alpha / 100000, 4)
         grad = sp_pr.find(f"{{{A_NS}}}gradFill")
         if grad is not None:
             info["gradient_xml"] = ET.tostring(grad, encoding="unicode")
     except Exception:
         pass
+    if alpha is None:
+        alpha = _xml_alpha_from_shape(shape)
+    if alpha is not None:
+        info["alpha"] = alpha
+        info["opacity"] = round(alpha / 100000, 4)
+        info["transparency"] = round(1 - alpha / 100000, 4)
     try:
-        info["transparency"] = round(float(fill.transparency), 4)
+        transparency = float(fill.transparency)
+        info["transparency"] = round(transparency, 4)
+        if alpha is None:
+            info["alpha"] = round((1 - transparency) * 100000)
+            info["opacity"] = round(1 - transparency, 4)
     except Exception:
         pass
     return info
@@ -189,7 +205,7 @@ def _fidelity_info(shape: Any) -> dict[str, Any]:
         info["raw_xml"] = xml
         info["custom_geometry"] = "custGeom" in xml
         info["gradient_fill"] = "gradFill" in xml
-        info["alpha_transforms"] = "<a:alpha" in xml
+        info["alpha_transforms"] = bool(re.search(r"<a:alpha(?:ModFix|Off)?", xml))
         info["blip_embeds"] = re.findall(r"r:embed=\"([^\"]+)\"", xml)
         info["blip_links"] = re.findall(r"r:link=\"([^\"]+)\"", xml)
         info["has_effects"] = any(token in xml for token in ("effectLst", "effectDag", "outerShdw", "glow"))
