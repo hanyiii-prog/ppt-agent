@@ -15,3 +15,28 @@ def test_quality_report_covers_fidelity_and_page_roles():
     assert report["alpha_transform_count"] == 1
     assert report["first_slide_is_first"] is True
     assert report["last_slide_is_last"] is True
+
+
+def test_quality_report_walks_nested_group_children():
+    report = inspect_dna({
+        "schema": "template-dna/v0.3",
+        "presentation": {}, "theme": {}, "masters": [],
+        "slides": [{
+            "slide": 1,
+            "role": "first",
+            "shapes": [{
+                "id": "group", "type": "GROUP", "is_group": True,
+                "geometry": {}, "style": {}, "fidelity": {"raw_xml": "group"},
+                "children": [{
+                    "id": "child", "type": "TEXT", "parent_id": "group",
+                    "geometry": {}, "style": {},
+                    "fidelity": {"raw_xml": "child", "alpha_transforms": [{"value": 50000}]},
+                }],
+            }],
+        }],
+    })
+    assert report["shape_count"] == 2
+    assert report["group_count"] == 1
+    assert report["parent_link_count"] == 1
+    assert report["raw_xml_count"] == 2
+    assert report["alpha_transform_count"] == 1
