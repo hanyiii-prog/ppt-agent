@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 pptx = ["python-pptx>=0.6.21"]
+qa = ["Pillow>=10.0", "numpy>=1.26"]
 test = ["pytest>=8.0"]
 
 [project.scripts]
