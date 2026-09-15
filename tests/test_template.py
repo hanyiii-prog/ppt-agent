@@ -16,7 +16,7 @@ def sample_pptx(tmp_path: Path) -> Path:
     prs.slide_width = 13 * 914400
     prs.slide_height = 7 * 914400
 
-    first = prs.slides[0]
+    first = prs.slides.add_slide(prs.slide_layouts[6])
     first.background.fill.solid()
     first.background.fill.fore_color.rgb = RGBColor(10, 20, 30)
     bottom = first.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, 2000000, 1000000)
