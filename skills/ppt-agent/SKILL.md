@@ -1,38 +1,43 @@
 # PPT Agent Skill
 
-## Purpose
+## Mission
 
-Use PPT Agent to create or revise professional presentation decks from source documents and, when provided, reference PPTX templates.
+Use PPT Agent as the presentation-engineering layer for an AI agent. The host agent supplies task context and model reasoning; PPT Agent owns source analysis, presentation planning, deterministic build, quality gates and repair.
 
-## Operating contract
+## Required workflow
 
-1. Inspect all provided source materials before designing slides.
-2. Extract facts, claims, constraints and source provenance.
-3. Analyze reference presentation structure and visual language when a template is provided.
-4. Build a narrative spine and slide plan before rendering.
-5. Produce a Universal Presentation IR as the canonical source.
-6. Render an editable PPTX using an available renderer.
-7. Render previews and run geometry/content/evidence/visual QA.
-8. If a gate fails, create a targeted repair, modify the source representation, rebuild, and rerun QA.
-9. Deliver only after required gates pass and the final artifact is recorded in a delivery manifest.
+1. **Inspect** source documents and reference PPTX files before proposing slides.
+2. **Extract evidence** and preserve provenance for important numbers, dates and claims.
+3. **Define the story**: audience, objective, key message, evidence and slide purposes.
+4. **Create Universal Presentation IR** as the source of truth.
+5. **Analyze/apply Template DNA** when a reference deck is supplied.
+6. **Build deterministically** with a supported renderer.
+7. **Render and inspect** geometry, content density, readability and visual consistency.
+8. **Run quality gates**. Failed gates block delivery.
+9. **Repair the source/IR/rules**, rebuild, rerender and recheck. Do not hide defects with untracked final-file patches.
+10. **Deliver** only the validated presentation and its manifest/evidence artifacts when requested.
 
-## Non-negotiable quality rules
+## Non-negotiable guardrails
 
-- Do not invent metrics, dates, names or claims.
-- Preserve source terminology unless the user explicitly requests rewriting.
-- Do not silently replace user-provided template structure with generic AI card grids.
-- Prefer content-driven layouts over repetitive decorative components.
-- Keep important numbers traceable to source evidence when provenance is available.
-- Never patch only the final PPTX when the underlying source representation can be corrected and rebuilt.
+- Never invent metrics, dates, quotations or business conclusions.
+- Prefer supplied source material over model memory.
+- Important claims should carry provenance whenever the source format permits it.
+- The final PPTX is a build artifact; the IR and source evidence are authoritative.
+- Keep output reproducible where practical: same inputs + version + configuration should produce equivalent structure.
+- Avoid repetitive card grids when the content does not justify them; choose layouts from content semantics and template grammar.
+- Preserve editability for native PPTX elements whenever the chosen renderer supports it.
+- Host agents are adapters. Do not make core presentation logic dependent on a single model or platform.
 
-## Host portability
+## Capability routing
 
-This skill is host-neutral. A host adapter may expose local files, shell tools, browser rendering, PowerPoint automation, or MCP. The core should select capabilities rather than assume a particular host or model.
+If the host exposes a native PPTX or Office capability, use it where it materially improves fidelity. Otherwise use the portable local renderer. If visual rendering is available, use it for QA before delivery.
 
-## Default workflow
+## Current V0.1 commands
 
-`Analyze → Evidence → Story → Plan → Design → IR → Build → Render → Critic → Repair → Validate → Deliver`
+```bash
+ppt-agent markdown-to-ir input.md -o workspace/presentation.json
+ppt-agent analyze-pptx reference.pptx -o workspace/template-dna.json
+ppt-agent qa-ir workspace/presentation.json
+```
 
-## Failure handling
-
-Repairs must be bounded. Preserve the failing artifact and QA report for diagnosis. Prefer fixing the smallest source-level cause rather than globally changing a style that may affect unrelated slides.
+V0.1 does not claim to be a full PPTX generator yet; later releases add native rendering, visual critique and automatic repair.
