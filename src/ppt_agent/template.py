@@ -3,11 +3,14 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 from typing import Any
+import hashlib
 import re
 import zipfile
 import xml.etree.ElementTree as ET
 
 EMU_PER_INCH = 914400
+A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 
 def _hex_rgb(color: Any) -> str | None:
@@ -19,9 +22,8 @@ def _hex_rgb(color: Any) -> str | None:
 
 
 def _xml_alpha(element: Any) -> int | None:
-    """Return DrawingML alpha (0..100000) from an element's color transform."""
     try:
-        node = element.find("{http://schemas.openxmlformats.org/drawingml/2006/main}alpha")
+        node = element.find(f"{{{A_NS}}}alpha")
         if node is not None and node.get("val") is not None:
             return int(node.get("val"))
     except (AttributeError, TypeError, ValueError):
@@ -44,10 +46,9 @@ def _fill_info(shape: Any) -> dict[str, Any]:
             info["rgb"] = rgb
     except Exception:
         pass
-    # python-pptx does not expose alpha consistently, so inspect the XML.
     try:
         sp_pr = shape._element.spPr
-        solid = sp_pr.find("{http://schemas.openxmlformats.org/drawingml/2006/main}solidFill")
+        solid = sp_pr.find(f"{{{A_NS}}}solidFill")
         if solid is not None:
             color = next(iter(solid), None)
             alpha = _xml_alpha(color) if color is not None else None
@@ -55,6 +56,9 @@ def _fill_info(shape: Any) -> dict[str, Any]:
                 info["alpha"] = alpha
                 info["opacity"] = round(alpha / 100000, 4)
                 info["transparency"] = round(1 - alpha / 100000, 4)
+        grad = sp_pr.find(f"{{{A_NS}}}gradFill")
+        if grad is not None:
+            info["gradient_xml"] = ET.tostring(grad, encoding="unicode")
     except Exception:
         pass
     try:
@@ -152,10 +156,7 @@ def _placeholder_info(shape: Any) -> dict[str, Any] | None:
         return None
     try:
         ph = shape.placeholder_format
-        return {
-            "idx": ph.idx,
-            "type": str(ph.type).split(".")[-1],
-        }
+        return {"idx": ph.idx, "type": str(ph.type).split(".")[-1]}
     except Exception:
         return {"type": "unknown"}
 
@@ -179,20 +180,47 @@ def _shape_type(shape: Any) -> str:
         return "unknown"
 
 
+def _fidelity_info(shape: Any) -> dict[str, Any]:
+    """Capture raw OOXML so unsupported PowerPoint features are not discarded."""
+    info: dict[str, Any] = {}
+    try:
+        xml = shape._element.xml
+        info["xml_sha256"] = hashlib.sha256(xml.encode("utf-8")).hexdigest()
+        info["raw_xml"] = xml
+        info["custom_geometry"] = "custGeom" in xml
+        info["gradient_fill"] = "gradFill" in xml
+        info["alpha_transforms"] = "<a:alpha" in xml
+        info["blip_embeds"] = re.findall(r"r:embed=\"([^\"]+)\"", xml)
+        info["blip_links"] = re.findall(r"r:link=\"([^\"]+)\"", xml)
+        info["has_effects"] = any(token in xml for token in ("effectLst", "effectDag", "outerShdw", "glow"))
+        info["has_transform_2d"] = "xfrm" in xml
+    except Exception:
+        pass
+    return info
+
+
+def _inheritance_info(slide_or_layout: Any) -> dict[str, Any]:
+    info: dict[str, Any] = {}
+    for attr in ("follow_master_graphics", "preserve", "show_master_shapes", "follow_master_background"):
+        try:
+            value = getattr(slide_or_layout, attr)
+            info[attr] = bool(value) if value is not None else None
+        except Exception:
+            pass
+    return info
+
+
 def _shape_record(shape: Any, z_index: int, parent_id: str | None = None) -> dict[str, Any]:
-    """Extract a shape with geometry, visual properties and explicit stacking order."""
     record: dict[str, Any] = {
         "id": str(getattr(shape, "shape_id", "")),
         "name": getattr(shape, "name", None),
         "type": _shape_type(shape),
         "z_index": z_index,
-        "z_order": "top" if z_index >= 0 else "unknown",
+        "z_order": z_index,
         "parent_id": parent_id,
         "geometry": {},
-        "style": {
-            "fill": _fill_info(shape),
-            "line": _line_info(shape),
-        },
+        "style": {"fill": _fill_info(shape), "line": _line_info(shape)},
+        "fidelity": _fidelity_info(shape),
     }
     for attr in ("left", "top", "width", "height"):
         try:
@@ -216,16 +244,12 @@ def _shape_record(shape: Any, z_index: int, parent_id: str | None = None) -> dic
         record["is_group"] = False
     children = getattr(shape, "shapes", None)
     if record["is_group"] and children is not None:
-        record["children"] = [
-            _shape_record(child, child_index, record["id"])
-            for child_index, child in enumerate(children)
-        ]
+        record["children"] = [_shape_record(child, child_index, record["id"]) for child_index, child in enumerate(children)]
     return record
 
 
 def _theme_colors(path: Path) -> dict[str, str]:
-    """Read theme color definitions directly from OOXML when present."""
-    ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+    ns = {"a": A_NS}
     result: dict[str, str] = {}
     try:
         with zipfile.ZipFile(path) as zf:
@@ -246,8 +270,7 @@ def _theme_colors(path: Path) -> dict[str, str]:
 
 
 def _layout_signature(slide: Any) -> dict[str, Any]:
-    types: Counter[str] = Counter()
-    placeholders: Counter[str] = Counter()
+    types: Counter[str] = Counter(); placeholders: Counter[str] = Counter()
     for shape in slide.shapes:
         types[_shape_type(shape)] += 1
         ph = _placeholder_info(shape)
@@ -256,44 +279,38 @@ def _layout_signature(slide: Any) -> dict[str, Any]:
     return {"shape_types": dict(types), "placeholders": dict(placeholders)}
 
 
-def _extract_master(prs: Any, master: Any) -> dict[str, Any]:
+def _extract_master(master: Any) -> dict[str, Any]:
     layouts = []
     for layout in master.slide_layouts:
         layouts.append({
             "name": layout.name,
             "type": str(getattr(layout, "type", "")).split(".")[-1],
+            "inheritance": _inheritance_info(layout),
+            "background": _background_info(layout),
             "shapes": [_shape_record(s, i) for i, s in enumerate(layout.shapes)],
+            "raw_layout_xml": getattr(layout._element, "xml", None),
         })
     return {
         "name": master.name,
         "background": _background_info(master),
+        "inheritance": _inheritance_info(master),
         "shapes": [_shape_record(s, i) for i, s in enumerate(master.shapes)],
         "layouts": layouts,
+        "raw_master_xml": getattr(master._element, "xml", None),
     }
 
 
 def analyze_pptx(path: str | Path) -> dict[str, Any]:
-    """Extract deep, deterministic Template DNA from a PPTX.
-
-    The DNA deliberately captures more than counts: exact geometry, stacking order,
-    fill/line transparency, text formatting, placeholders, groups, backgrounds,
-    slide layouts and OOXML theme colors. First and last slides are classified as
-    special presentation surfaces rather than being mixed into ordinary layouts.
-    """
+    """Extract semantic + fidelity Template DNA from a PPTX."""
     try:
         from pptx import Presentation as PptxPresentation
     except ImportError as exc:
-        raise RuntimeError(
-            "python-pptx is required for PPTX analysis; install with "
-            "pip install 'ppt-agent[pptx]'"
-        ) from exc
+        raise RuntimeError("python-pptx is required for PPTX analysis; install with pip install 'ppt-agent[pptx]'") from exc
 
     source = Path(path)
     prs = PptxPresentation(str(source))
-    fonts: Counter[str] = Counter()
-    font_sizes: Counter[float] = Counter()
-    fills: Counter[str] = Counter()
-    shape_types: Counter[str] = Counter()
+    fonts: Counter[str] = Counter(); font_sizes: Counter[float] = Counter()
+    fills: Counter[str] = Counter(); shape_types: Counter[str] = Counter()
     slides: list[dict[str, Any]] = []
 
     for slide_no, slide in enumerate(prs.slides, 1):
@@ -303,32 +320,27 @@ def analyze_pptx(path: str | Path) -> dict[str, Any]:
             shape_types[record["type"]] += 1
             text = record.get("text") or {}
             for font in text.get("fonts", []):
-                if font.get("name"):
-                    fonts[font["name"]] += 1
-                if font.get("size_pt"):
-                    font_sizes[font["size_pt"]] += 1
+                if font.get("name"): fonts[font["name"]] += 1
+                if font.get("size_pt"): font_sizes[font["size_pt"]] += 1
             fill_rgb = (record.get("style", {}).get("fill") or {}).get("rgb")
-            if fill_rgb:
-                fills[fill_rgb] += 1
-
+            if fill_rgb: fills[fill_rgb] += 1
         slides.append({
             "slide": slide_no,
             "role": role,
             "background": _background_info(slide),
+            "inheritance": _inheritance_info(slide),
             "layout_name": getattr(slide.slide_layout, "name", None),
             "layout_signature": _layout_signature(slide),
             "shapes": records,
+            "raw_slide_xml": getattr(slide._element, "xml", None),
         })
 
-    masters = [_extract_master(prs, master) for master in prs.slide_masters]
+    masters = [_extract_master(master) for master in prs.slide_masters]
     return {
-        "schema": "template-dna/v0.2",
+        "schema": "template-dna/v0.3",
         "source": str(source),
         "presentation": {
-            "slide_size_inches": {
-                "width": round(prs.slide_width / EMU_PER_INCH, 3),
-                "height": round(prs.slide_height / EMU_PER_INCH, 3),
-            },
+            "slide_size_inches": {"width": round(prs.slide_width / EMU_PER_INCH, 3), "height": round(prs.slide_height / EMU_PER_INCH, 3)},
             "slide_count": len(prs.slides),
             "first_slide_role": "first" if prs.slides else None,
             "last_slide_role": "last" if prs.slides else None,
