@@ -14,9 +14,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install test dependencies
-        run: python -m pip install --upgrade pip pytest
-      - name: Install package
-        run: pip install -e ".[pptx,test]"
+      - name: Install system render dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice-impress poppler-utils
+      - name: Install package and QA dependencies
+        run: python -m pip install -e ".[pptx,qa,test]"
       - name: Run tests
         run: pytest -q
