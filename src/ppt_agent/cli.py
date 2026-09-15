@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from . import __version__
+from .dna_to_ir import template_dna_to_ir
 from .markdown import parse_markdown
 from .qa import validate_ir
 from .template import analyze_pptx
@@ -23,6 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
     markdown.add_argument("source", type=Path); markdown.add_argument("-o", "--output", required=True, type=Path)
     template = sub.add_parser("analyze-pptx", help="Extract Template DNA from a PPTX")
     template.add_argument("source", type=Path); template.add_argument("-o", "--output", required=True, type=Path)
+    dna_ir = sub.add_parser("dna-to-ir", help="Convert Template DNA JSON to Universal IR")
+    dna_ir.add_argument("source", type=Path); dna_ir.add_argument("-o", "--output", required=True, type=Path)
+    convert = sub.add_parser("pptx-to-ir", help="Analyze a PPTX and convert its Template DNA to Universal IR")
+    convert.add_argument("source", type=Path); convert.add_argument("-o", "--output", required=True, type=Path)
     render = sub.add_parser("render-pptx", help="Render every PPTX slide to PNG")
     render.add_argument("source", type=Path); render.add_argument("-o", "--output", required=True, type=Path)
     visual = sub.add_parser("visual-regression", help="Render two decks and compare every page")
@@ -45,18 +50,27 @@ def _read_json(path: Path) -> dict:
         raise SystemExit(f"invalid JSON: {exc}") from exc
 
 
+def _write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = build_parser(); args = parser.parse_args()
     if args.command in {"validate-ir", "qa-ir"}:
         report = validate_ir(_read_json(args.path)); print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2)); return 0 if report.passed else 2
     if args.command == "markdown-to-ir":
         presentation = parse_markdown(args.source.read_text(encoding="utf-8"), source_id=args.source.name)
-        args.output.parent.mkdir(parents=True, exist_ok=True); args.output.write_text(presentation.to_json() + "\n", encoding="utf-8")
-        print(f"wrote {args.output} ({len(presentation.slides)} slides)"); return 0
+        _write_json(args.output, json.loads(presentation.to_json())); print(f"wrote {args.output} ({len(presentation.slides)} slides)"); return 0
     if args.command == "analyze-pptx":
-        result = analyze_pptx(args.source); args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"wrote {args.output} ({result['slide_count']} slides)"); return 0
+        result = analyze_pptx(args.source); _write_json(args.output, result)
+        print(f"wrote {args.output} ({result['presentation']['slide_count']} slides)"); return 0
+    if args.command == "dna-to-ir":
+        dna = _read_json(args.source); presentation = template_dna_to_ir(dna, source=args.source.name)
+        _write_json(args.output, json.loads(presentation.to_json())); print(f"wrote {args.output} ({len(presentation.slides)} slides)"); return 0
+    if args.command == "pptx-to-ir":
+        dna = analyze_pptx(args.source); presentation = template_dna_to_ir(dna, source=args.source.name)
+        _write_json(args.output, json.loads(presentation.to_json())); print(f"wrote {args.output} ({len(presentation.slides)} slides)"); return 0
     if args.command == "render-pptx":
         from .visual_regression import render_pptx
         pages = render_pptx(args.source, args.output); print(f"rendered {len(pages)} slides to {args.output}"); return 0
@@ -79,7 +93,7 @@ def main() -> int:
             "critic_gate": critic_gate.to_dict(),
             "visual_gate": visual_gate.to_dict() if visual_gate else None,
         }
-        args.output.parent.mkdir(parents=True, exist_ok=True); args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _write_json(args.output, result)
         for page in page_gate.pages:
             print(f"page {page.page}: shapes={page.shape_count} oob={page.out_of_bounds} blank={page.blank_ratio:.3%} {'PASS' if page.passed else 'FAIL'}")
         for finding in critic_gate.pages:
