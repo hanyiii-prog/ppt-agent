@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--no-gate", action="store_true", help="Skip the delivery gate")
     build.add_argument("--no-html", action="store_true", help="Skip the HTML preview")
     build.add_argument("--facts", type=Path, help="Fact JSON (array of {claim, source_id, locator}) for the fact lock")
+    build.add_argument("--preview", action="store_true", help="Also rasterise the deck to PNG page previews")
+    build.add_argument("--preview-dpi", type=float, default=96.0, help="Preview resolution (default 96)")
 
     caps = sub.add_parser("capabilities", help="Print the contract, host capabilities and renderer inventory")
     caps.add_argument("--host", help="Host profile: codex, workbuddy, doubao, claude, chatgpt")
@@ -71,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("cases", type=Path, nargs="?", default=Path("benchmarks/cases"))
     bench.add_argument("-o", "--output", required=True, type=Path, help="Benchmark report JSON")
     bench.add_argument("--workspace", type=Path, help="Where to write intermediate runs")
+
+    preview = sub.add_parser("preview", help="Rasterise a rendered PPTX into one PNG per slide")
+    preview.add_argument("source", type=Path, help="Path to a .pptx file")
+    preview.add_argument("-o", "--output-dir", type=Path, help="Directory for the PNGs (default: <stem>-preview)")
+    preview.add_argument("--dpi", type=float, default=96.0, help="Rasterisation resolution (default 96)")
 
     mcp = sub.add_parser("mcp", help="Run the MCP stdio server (alias of ppt-agent-mcp)")
     mcp.add_argument("--workspace", type=Path, default=None)
@@ -227,6 +234,10 @@ def main() -> int:
         if outcome.fact_audit:
             print(f"facts : {'PASS' if outcome.fact_audit['passed'] else 'FAIL'} ({outcome.fact_audit['supported']}/{outcome.fact_audit['checked']} supported)")
         _write_json(Path(args.out_dir) / f"{args.stem}-build.json", outcome.to_dict())
+        if args.preview:
+            from .preview import rasterize_pptx
+            pages = rasterize_pptx(outcome.pptx_path, Path(args.out_dir) / f"{args.stem}-preview", dpi=args.preview_dpi)
+            print(f"preview: {len(pages)} page(s) -> {pages[0].parent}" if pages else "preview: no pages")
         print(f"build : {'PASS' if outcome.ok else 'FAIL'} — {outcome.slide_count} slides")
         return 0 if outcome.ok else 2
     if args.command == "benchmark":
@@ -237,6 +248,13 @@ def main() -> int:
         print(summarize(report))
         print(f"wrote {args.output}")
         return 0 if report.passed else 2
+    if args.command == "preview":
+        from .preview import rasterize_pptx
+        pages = rasterize_pptx(args.source, args.output_dir, dpi=args.dpi)
+        for page in pages:
+            print(page)
+        print(f"preview: {len(pages)} page(s)")
+        return 0
     if args.command == "mcp":
         from .mcp.server import serve
         return serve(workspace=args.workspace, host=args.host)
