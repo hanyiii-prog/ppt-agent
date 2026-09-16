@@ -67,20 +67,23 @@ def _fill_info(shape: Any) -> dict[str, Any]:
             info["gradient_xml"] = ET.tostring(grad, encoding="unicode")
     except Exception:
         pass
-    if alpha is None:
+    transparency: float | None
+    try:
+        transparency = float(fill.transparency)
+    except (AttributeError, TypeError, ValueError):
+        transparency = None
+    # python-pptx's resolved transparency is authoritative when exposed; only fall
+    # back to regex-scraping the raw OOXML when the high-level API hides it.
+    if alpha is None and transparency is None:
         alpha = _xml_alpha_from_shape(shape)
-    if alpha is not None:
+    if transparency is not None:
+        info["transparency"] = round(transparency, 4)
+        info["alpha"] = round((1 - transparency) * 100000)
+        info["opacity"] = round(1 - transparency, 4)
+    elif alpha is not None:
         info["alpha"] = alpha
         info["opacity"] = round(alpha / 100000, 4)
         info["transparency"] = round(1 - alpha / 100000, 4)
-    try:
-        transparency = float(fill.transparency)
-        info["transparency"] = round(transparency, 4)
-        if alpha is None:
-            info["alpha"] = round((1 - transparency) * 100000)
-            info["opacity"] = round(1 - transparency, 4)
-    except Exception:
-        pass
     return info
 
 
