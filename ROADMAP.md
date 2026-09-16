@@ -71,6 +71,13 @@ Status legend: `[x]` shipped in code, `[~]` partial / v1 scope, `[ ]` not starte
 - [x] visual gates upgrade from structural to rendered whenever a rasteriser exists
 - [x] `build --preview` flag and the `preview` CLI command
 
+## V1.2 — Template-driven design
+- [x] Template DNA → theme tokens (`ppt_agent.theme.theme_from_dna`)
+- [x] palette, font stack and type scale read from the reference deck
+- [x] `build --template` on the CLI and a `template` argument on the MCP build tool
+- [x] theme recorded in the IR, so a later `ir-to-pptx` reproduces the same design
+- [x] stock Office dark slots rejected when they fall outside the brand hue family
+
 ## Renderer v1 scope
 
 The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emits an editable `.pptx`:
@@ -100,6 +107,11 @@ semantic slide → design.design_presentation() → positioned, styled IR → pe
 - A heading that names a layout rather than carrying content (`## 封面`) is treated as a marker; the
   real cover headline comes from the paragraphs underneath it.
 - Any slide whose components already carry `x/y/w/h` (Template DNA path) bypasses the design layer.
+
+- Theme tokens can come from a reference deck: `theme_from_dna()` maps the Template DNA palette,
+  font stack and type scale onto the token set, so `build --template` restyles the deck without
+  touching layout code. Layout rhythm keeps the defaults — DNA carries per-shape geometry rather
+  than a versioned rhythm, and guessing one would be less faithful than not guessing at all.
 
 ## Known limits
 
