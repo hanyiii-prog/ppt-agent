@@ -49,6 +49,42 @@ def _run(cmd: list[str]) -> None:
         raise RuntimeError(f"command failed: {' '.join(cmd)}\n{detail}") from exc
 
 
+# LibreOffice ships as `libreoffice` on Debian/Ubuntu and `soffice` on Windows
+# and most RPM distributions. Probe both instead of assuming one.
+OFFICE_BINARIES: tuple[str, ...] = ("libreoffice", "soffice")
+
+
+def office_binary() -> str | None:
+    """Absolute path of the LibreOffice/soffice executable, or None."""
+    for name in OFFICE_BINARIES:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def rasteriser_tools() -> tuple[str, ...]:
+    """Which rasterisation tools are reachable on this host."""
+    return tuple(name for name in (*OFFICE_BINARIES, "pdftoppm") if shutil.which(name))
+
+
+def rasteriser_available() -> bool:
+    """True when a deck can actually be rasterised on this host."""
+    return office_binary() is not None and shutil.which("pdftoppm") is not None
+
+
+def flatten_pixels(image: "Image.Image") -> list:
+    """Read every pixel as a flat sequence.
+
+    `Image.getdata()` is deprecated and disappears in Pillow 14, so prefer the
+    replacement when the installed Pillow provides it.
+    """
+    getter = getattr(image, "get_flattened_data", None)
+    if callable(getter):
+        return list(getter())
+    return list(image.getdata())
+
+
 def _prepare_output_dir(output_dir: Path) -> None:
     """Remove stale renders so a previous larger deck cannot affect page counts."""
     if output_dir.exists():
@@ -63,10 +99,15 @@ def _prepare_output_dir(output_dir: Path) -> None:
 
 def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144) -> list[Path]:
     """Render a PPTX to one PNG per slide using LibreOffice + pdftoppm."""
+    binary = office_binary()
+    if binary is None:
+        raise RuntimeError(
+            "no LibreOffice/soffice executable found; rasterisation is unavailable on this host"
+        )
     _prepare_output_dir(output_dir)
     with tempfile.TemporaryDirectory(prefix="ppt-agent-render-") as tmp:
         tmp_path = Path(tmp)
-        _run(["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", str(tmp_path), str(pptx)])
+        _run([binary, "--headless", "--convert-to", "pdf", "--outdir", str(tmp_path), str(pptx)])
         pdf = tmp_path / f"{pptx.stem}.pdf"
         if not pdf.exists():
             raise RuntimeError(f"LibreOffice did not produce PDF for {pptx}")
@@ -145,5 +186,6 @@ def render_and_compare(reference_pptx: Path, candidate_pptx: Path, workspace: Pa
 
 
 def write_report(report: VisualReport, output: Path) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from .textio import write_json_lf
+
+    write_json_lf(output, report.to_dict())

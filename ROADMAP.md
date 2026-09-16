@@ -1,53 +1,97 @@
 # PPT Agent Roadmap
 
+Status legend: `[x]` shipped in code, `[~]` partial / v1 scope, `[ ]` not started.
+
 ## V0.1 — Foundation
 - [x] GitHub repository
 - [x] Portable Skill contract
-- [x] Universal Presentation IR schema
-- [x] Typed Python IR models
+- [x] Universal Presentation IR schema (`ir/presentation.schema.json`)
+- [x] Typed Python IR models (`ppt_agent.ir`, with `to_dict`/`from_dict` round trip)
 - [x] Initial CLI
 - [x] GitHub Actions test workflow
-- [ ] PPTX inspection baseline
-- [ ] First end-to-end sample
+- [x] PPTX inspection baseline (`ppt_agent.template.analyze_pptx`)
+- [x] First end-to-end sample (`tests/test_render_e2e.py`)
 
 ## V0.2 — Template DNA
-- reference PPTX structural extraction
-- typography/color/spacing inventory
-- page-type clustering
-- reusable layout grammar
+- [x] reference PPTX structural extraction
+- [x] typography/color/spacing inventory
+- [x] page-type clustering (first/body/last roles)
+- [x] reusable layout grammar (`ppt_agent.visual_grammar`)
+- [x] OOXML fidelity capture (alpha / z-order / group / raw XML)
+- [x] DNA → IR conversion (`ppt_agent.dna_to_ir`)
 
 ## V0.3 — Build + Visual QA
-- native editable PPTX renderer
-- deterministic rendering
-- geometry checks
-- contact-sheet visual review
+- [x] native editable PPTX renderer (`ppt_agent.renderer`)
+- [x] deterministic rendering (single code path, no randomness)
+- [x] geometry checks (`ppt_agent.page_validation`)
+- [x] contact-sheet visual review (`ppt_agent.visual_regression`, `visual_critic`)
+- [x] `ir-to-pptx` CLI command
 
 ## V0.4 — Evidence Safety
-- Fact Registry
-- provenance graph
-- Fact Lock
-- source-to-slide traceability
+- [x] Fact Registry (`ppt_agent.fact_registry`)
+- [x] provenance graph (claims carry `Provenance`)
+- [x] Fact Lock (support audit via `audit_presentation`; `ppt-agent audit-facts`)
+- [x] source-to-slide traceability (`Provenance.locator` preserved end to end)
 
 ## V0.5 — Critic + Repair
-- visual critic
-- layout/density scoring
-- targeted repair tasks
-- bounded rebuild loop
+- [x] visual critic (`ppt_agent.visual_critic`)
+- [x] layout/density scoring (`ppt_agent.visual_critic`, `visual_grammar`)
+- [x] targeted repair tasks (`delivery._repair_requests`)
+- [x] bounded rebuild loop (`delivery.run_repair_loop`)
+- [x] renderer build callback (`Renderer.build_callback`)
 
-## V0.6 — Agent Interoperability
-- MCP server
-- generic adapter
-- capability negotiation
+## V0.6 — Story + Agent Interoperability
+- [x] Story Architect (`ppt_agent.story`)
+- [x] MCP server (`ppt_agent.mcp`, dependency-free stdio transport, 10 tools)
+- [x] generic adapter (`ppt_agent.adapters.HostAdapter`, `GenericAdapter`, `LocalAdapter`)
+- [x] capability negotiation (`ppt_agent.contracts.negotiate`, `HostAdapter.effective`)
 
 ## V0.7 — Host Adapters
-- Codex
-- WorkBuddy
-- 豆包工作
-- additional agent hosts
+- [x] Codex (host profile)
+- [x] WorkBuddy (host profile)
+- [x] 豆包工作 (host profile)
+- [x] Claude (host profile)
+- [x] ChatGPT (host profile)
+- [x] additional agent hosts (declarative profiles via `create_adapter` / `HostAdapter`)
 
 ## V1.0 — Stable Platform
-- stable IR contract
-- renderer SDK
-- adapter SDK
-- benchmark suite
-- reproducible release process
+- [x] stable IR contract (`ppt_agent.contracts`, `ir_version` stamp, `supported_ir_versions`)
+- [x] renderer SDK (`ppt_agent.renderers`: protocol, registry, preference order, HTML visual engine)
+- [x] adapter SDK (`ppt_agent.adapters`, capability descriptor schema)
+- [x] benchmark suite (`ppt_agent.benchmark`, `benchmarks/cases`, determinism assertions)
+- [x] reproducible release process (`ppt_agent.release`, `scripts/release.py`, `release.yml`)
+- [x] unified SDK facade (`ppt_agent.sdk.PptAgent`) shared by CLI, MCP and integrations
+
+## Renderer v1 scope
+
+The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emits an editable `.pptx`:
+
+- Absolute placement when a component carries `x/y/w/h` (inches); deterministic top-down flow otherwise.
+- Component types: `text`, `paragraph`, `title`, `shape`, `image`, `table`, `chart`, `group`.
+- Style mapping: solid fill + transparency (OOXML `a:alpha`), line color/width, font size/bold/italic/name/color/alignment.
+- Slide background fill, speaker notes, per-deck slide size from `theme.slide_size_inches`.
+- Group components recursively render their captured children.
+
+Layout is resolved once in `ppt_agent.styling.resolve_layout()` and consumed by both the native and HTML
+engines, so a cross-engine comparison compares fidelity rather than two layout algorithms.
+
+The HTML engine (`src/ppt_agent/renderers/html.py`) emits one self-contained, printable deck: inline
+styles, base64-inlined assets, escaped text, `@media print` page breaks.
+
+## Known limits
+
+Tracked for the next cycle:
+
+- gradient fills fall back to solid in both engines
+- `chart` components render as labelled placeholders on both engines
+- embedded image bytes require `data.bytes`/`data.path`
+- flow layout estimates text height arithmetically rather than measuring glyphs, so a very long single
+  block can still overflow; the page gate catches it rather than the layout preventing it
+- the HTML engine positions text boxes from the same layout as the native engine, so text that spills
+  in the browser does not reflow the following blocks
+
+## Contract compatibility policy
+
+- `IR_SCHEMA_VERSION` `1.0` is current; dialects in `SUPPORTED_IR_VERSIONS` remain readable.
+- A dialect is only removed with a major bump and a migration note here.
+- `0.1` is retained so decks written by V0.x still load.

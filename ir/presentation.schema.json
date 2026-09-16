@@ -5,7 +5,12 @@
   "type": "object",
   "required": ["version", "metadata", "slides"],
   "properties": {
-    "version": {"type": "string"},
+    "ir_version": {
+      "type": "string",
+      "description": "Stable IR contract version this document conforms to",
+      "enum": ["0.1", "1.0"]
+    },
+    "version": {"type": "string", "description": "IR dialect marker (kept in sync with ir_version)"},
     "metadata": {
       "type": "object",
       "required": ["title"],
@@ -13,7 +18,8 @@
         "title": {"type": "string"},
         "author": {"type": "string"},
         "audience": {"type": "string"},
-        "objective": {"type": "string"}
+        "objective": {"type": "string"},
+        "ir_version": {"type": "string"}
       },
       "additionalProperties": true
     },

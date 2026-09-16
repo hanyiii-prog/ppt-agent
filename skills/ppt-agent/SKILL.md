@@ -4,6 +4,18 @@
 
 Use PPT Agent as the presentation-engineering layer for an AI agent. The host agent supplies task context and model reasoning; PPT Agent owns source analysis, presentation planning, deterministic build, quality gates and repair.
 
+## Entry points
+
+Pick whichever the host supports; all three reach the same code.
+
+| Host surface | How to start |
+|---|---|
+| MCP | Connect the `ppt-agent-mcp` server, then call `ppt_agent_capabilities` first |
+| CLI | `ppt-agent capabilities`, then `ppt-agent build <source.md> -o <out-dir>` |
+| Python | `from ppt_agent import PptAgent` |
+
+**Always begin with `ppt_agent_capabilities` / `ppt-agent capabilities`.** It reports which gates this host can actually run and what degrades; assuming a rasteriser exists is the most common way to deliver a deck with unverified pages.
+
 ## Required workflow
 
 1. **Inspect** source documents and reference PPTX files before proposing slides.
@@ -23,6 +35,15 @@ The production loop is therefore:
 `Plan → Build → Render all pages → Page Gates → Visual Critic → Repair → Rebuild → Render all pages → Page Gates → Final Delivery`
 
 This same loop is used both for development/regression testing and for the final user-facing PPT generation. Development tests prove the machinery works; production validation proves the actual requested deck is acceptable.
+
+## Reading the gate result
+
+A gate response always states which gates ran. Read `mode` and `degraded` before trusting `passed`:
+
+- `"mode": "rendered"`, `degraded: []` — full page, critic and visual-regression gates passed.
+- `"mode": "structural"`, `degraded: ["render_preview"]` — bounds, zero-size shapes and empty slides were checked; **image-level problems were not**. Tell the user the visual gates did not run rather than implying a full check.
+
+Never present a structural-only pass as visual validation. See `docs/adapters.md` for the fallback matrix.
 
 ## Template DNA requirements
 
@@ -55,19 +76,41 @@ Use the OOXML fidelity layer as an escape hatch when `python-pptx` or another hi
 - Host agents are adapters. Do not make core presentation logic dependent on a single model or platform.
 - A script that exits successfully is **not** sufficient visual validation. A rendered deck must pass the per-page production gate before delivery.
 - If visual regression is enabled, **zero failed pages is the release criterion**. Aggregate averages must never hide a bad slide.
+- Treat the MCP `--workspace` root as a hard boundary for outputs.
 
 ## Capability routing
 
 If the host exposes a native PPTX or Office capability, use it where it materially improves fidelity. Otherwise use the portable local renderer. If visual rendering is available, use it for QA before delivery.
 
-## Current V0.1 commands
+Choose the renderer deliberately:
+
+- `native-pptx` — editable `.pptx`. The default whenever python-pptx is installed.
+- `html` — self-contained, printable preview. Use it for fast visual iteration and when the host cannot open a deck.
+
+## Commands (V1.0)
 
 ```bash
+ppt-agent capabilities                                    # what can this host do?
 ppt-agent markdown-to-ir input.md -o workspace/presentation.json
 ppt-agent analyze-pptx reference.pptx -o workspace/template-dna.json
+ppt-agent ir-to-pptx workspace/presentation.json -o output.pptx
+ppt-agent ir-to-html workspace/presentation.json -o preview.html
 ppt-agent qa-ir workspace/presentation.json
 ppt-agent validate-pptx output.pptx -o workspace/page-gate.json
 ppt-agent visual-regression reference.pptx output.pptx -o workspace/visual-report.json
+ppt-agent audit-facts workspace/presentation.json --facts facts.json
+ppt-agent build input.md -o workspace --stem deck --facts facts.json
+ppt-agent benchmark benchmarks/cases -o workspace/benchmark-report.json
+ppt-agent-mcp --workspace workspace
+ppt-agent-release build --root .
 ```
 
-V0.1 now includes the foundation of the per-page render/validation loop. Later releases will connect the page gate to the Visual Critic and automatic Repair Agent so the final generation loop can repair failed pages autonomously.
+`ppt-agent build` is the whole loop in one call: plan, render, gate and emit the manifest plus the
+HTML preview. Prefer it over chaining subcommands by hand.
+
+## Fact lock
+
+`--facts` / the `facts` argument takes a registry of `{claim, source_id, locator}` entries. Every
+textual claim in the deck is checked against it and the build fails when a claim is unsupported. Register
+the claims you actually sourced; a partial registry will correctly block the build rather than pass
+silently.

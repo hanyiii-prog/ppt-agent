@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from .contracts import IR_SCHEMA_VERSION
 from .ir import Component, Presentation, Provenance, Slide
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -44,7 +45,7 @@ def parse_markdown(text: str, *, source_id: str = "markdown") -> Presentation:
         slides.append(current)
 
     return Presentation(
-        version="0.1",
+        version=IR_SCHEMA_VERSION,
         title=title,
         slides=slides,
         sources=[{"id": source_id, "type": "markdown"}],

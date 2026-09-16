@@ -168,7 +168,7 @@ def extract_fidelity_dna(path: str | Path, slide_index: int = 1) -> dict[str, An
 
         slide_path = slide_paths[slide_index - 1]
         slide_root = ET.fromstring(zf.read(slide_path))
-        slide_rels_path = f"ppt/slides/_rels/{Path(slide_path).name}.rels"
+        slide_rels_path = posixpath.join("ppt/slides/_rels", posixpath.basename(slide_path) + ".rels")
         slide_rels_xml = zf.read(slide_rels_path)
         slide_rels = _rel_map(slide_rels_xml)
         layout_target = slide_rels.get(next((k for k, v in slide_rels.items() if v and "slideLayout" in v), ""))
@@ -177,14 +177,19 @@ def extract_fidelity_dna(path: str | Path, slide_index: int = 1) -> dict[str, An
             raise ValueError("slide layout relationship could not be resolved")
 
         layout_root = ET.fromstring(zf.read(layout_path))
-        layout_rels_path = f"{Path(layout_path).parent}/_rels/{Path(layout_path).name}.rels"
+        layout_dir = posixpath.dirname(layout_path)
+        layout_rels_path = posixpath.join(layout_dir, "_rels", posixpath.basename(layout_path) + ".rels")
         layout_rels_xml = zf.read(layout_rels_path)
         layout_rels = _rel_map(layout_rels_xml)
 
         master_target = layout_rels.get(next((k for k, v in layout_rels.items() if v and "slideMaster" in v), ""))
-        master_path = _zip_path(str(Path(layout_path).parent), master_target) if master_target else None
+        master_path = _zip_path(layout_dir, master_target) if master_target else None
         master_root = ET.fromstring(zf.read(master_path)) if master_path and master_path in zf.namelist() else None
-        master_rels_path = f"{Path(master_path).parent}/_rels/{Path(master_path).name}.rels" if master_path else None
+        master_rels_path = (
+            posixpath.join(posixpath.dirname(master_path), "_rels", posixpath.basename(master_path) + ".rels")
+            if master_path
+            else None
+        )
         master_rels_xml = zf.read(master_rels_path) if master_rels_path and master_rels_path in zf.namelist() else b""
         master_rels = _rel_map(master_rels_xml) if master_rels_xml else {}
 
@@ -229,9 +234,9 @@ def extract_fidelity_dna(path: str | Path, slide_index: int = 1) -> dict[str, An
             "assets": _media_manifest(
                 zf,
                 [
-                    (str(Path(layout_path).parent), layout_rels),
-                    (str(Path(slide_path).parent), slide_rels),
-                    (str(Path(master_path).parent), master_rels) if master_path else ("", {}),
+                    (layout_dir, layout_rels),
+                    (posixpath.dirname(slide_path), slide_rels),
+                    (posixpath.dirname(master_path), master_rels) if master_path else ("", {}),
                 ],
             ),
         }
