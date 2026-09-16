@@ -62,6 +62,15 @@ Status legend: `[x]` shipped in code, `[~]` partial / v1 scope, `[ ]` not starte
 - [x] reproducible release process (`ppt_agent.release`, `scripts/release.py`, `release.yml`)
 - [x] unified SDK facade (`ppt_agent.sdk.PptAgent`) shared by CLI, MCP and integrations
 
+## V1.1 — Designed output
+- [x] theme token system (`ppt_agent.theme`: palette, type scale, rhythm, named themes)
+- [x] design layer (`ppt_agent.design`: cover / agenda / content / section / closing layouts)
+- [x] design composed in IR, so the native and HTML engines share one design
+- [x] template-injected slides (explicit geometry) pass through untouched
+- [x] PPTX → PNG rasteriser (`ppt_agent.preview`, Pillow backend)
+- [x] visual gates upgrade from structural to rendered whenever a rasteriser exists
+- [x] `build --preview` flag and the `preview` CLI command
+
 ## Renderer v1 scope
 
 The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emits an editable `.pptx`:
@@ -78,6 +87,20 @@ engines, so a cross-engine comparison compares fidelity rather than two layout a
 The HTML engine (`src/ppt_agent/renderers/html.py`) emits one self-contained, printable deck: inline
 styles, base64-inlined assets, escaped text, `@media print` page breaks.
 
+## Design layer scope
+
+Since V1.1 the render path is:
+
+```text
+semantic slide → design.design_presentation() → positioned, styled IR → per-renderer draw
+```
+
+- Layouts shipped: `cover`, `agenda`, `content`, `section`, `closing`.
+- Page purpose is resolved from English or Chinese headings (`封面`, `目录`, `总结`, `章节`, …).
+- A heading that names a layout rather than carrying content (`## 封面`) is treated as a marker; the
+  real cover headline comes from the paragraphs underneath it.
+- Any slide whose components already carry `x/y/w/h` (Template DNA path) bypasses the design layer.
+
 ## Known limits
 
 Tracked for the next cycle:
@@ -89,6 +112,10 @@ Tracked for the next cycle:
   block can still overflow; the page gate catches it rather than the layout preventing it
 - the HTML engine positions text boxes from the same layout as the native engine, so text that spills
   in the browser does not reflow the following blocks
+- the design layer ships five page archetypes; richer ones (metric cards, comparison, timeline) are
+  not implemented yet, so a dense list still renders as a list
+- the Pillow rasteriser is a fidelity preview, not a pixel-accurate Office renderer: gradients, shadows
+  and 3-D effects are approximated, and text metrics come from the installed CJK font
 
 ## Contract compatibility policy
 

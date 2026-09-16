@@ -10,7 +10,7 @@ and model providers are adapters around a stable core.
 1. **Host Adapter** — translates host-agent capabilities and task input into the core contract.
 2. **SDK facade** (`ppt_agent.sdk.PptAgent`) — one stable entry point per pipeline stage.
 3. **Intelligence Core** — analyzes sources, constructs narrative structure, and plans slides.
-4. **Design Intelligence** — extracts Template DNA and chooses layout/style rules.
+4. **Design Layer** — theme tokens (`ppt_agent.theme`) and the layout synthesiser (`ppt_agent.design`); Template DNA extraction supplies extracted geometry.
 5. **Universal IR** — canonical presentation representation and source of truth (`ppt_agent.ir`).
 6. **Renderer SDK** (`ppt_agent.renderers`) — pluggable IR → artifact engines behind one protocol.
 7. **Quality Gates / Critic / Repair** — deterministic checks plus visual review and targeted rebuilds.
@@ -32,6 +32,8 @@ Python import ─┘
 |---|---|
 | `ppt_agent.contracts` | Stable versions, capability model, IR version checks, negotiation |
 | `ppt_agent.styling` | Shared style conventions and the single layout algorithm |
+| `ppt_agent.theme` | Theme tokens: palettes, font stacks, type scale, spacing rhythm (`THEMES`, `resolve_theme`) |
+| `ppt_agent.design` | Layout synthesiser: semantic slides → positioned, styled IR (`design_presentation`) |
 | `ppt_agent.ir` | Universal IR dataclasses + `to_dict`/`from_dict` |
 | `ppt_agent.markdown` | Markdown → IR (flat mapper) |
 | `ppt_agent.story` | Story Architect: Markdown → narrative outline → IR |
@@ -47,6 +49,7 @@ Python import ─┘
 | `ppt_agent.page_validation` | Geometry / blank-page gates (rendered and structural) |
 | `ppt_agent.visual_critic` | Visual review rules |
 | `ppt_agent.visual_regression` | PNG render + SSIM/MAE comparison, rasteriser detection |
+| `ppt_agent.preview` | PPTX → PNG rasterisation via Pillow, so a host without LibreOffice can still preview |
 | `ppt_agent.fact_registry` | Provenance-backed fact store + claim audit |
 | `ppt_agent.delivery` | Delivery policy + bounded repair loop |
 | `ppt_agent.manifest` | Per-page delivery manifest |
@@ -68,7 +71,17 @@ still runs `ppt-agent capabilities`.
 
 ## Rendering contract
 
-`render_presentation(ir, output)` is the single native code path. `NativePptxRenderer` and
+The path from outline to artifact has four stops:
+
+```
+semantic slide → design.design_presentation() → positioned, styled IR → renderer
+```
+
+`design_presentation()` is theme-driven and renderer-agnostic: it emits plain IR components carrying
+`x/y/w/h` (inches) plus style dicts. Slides that already carry geometry (the Template DNA path) are
+passed through untouched, so an extracted design is never overwritten by the default theme.
+
+After that, `render_presentation(ir, output)` is the single native code path. `NativePptxRenderer` and
 `HtmlRenderer` both consume the **same** layout resolved by `styling.resolve_layout()`, so a
 cross-engine comparison compares typography and fidelity, not two divergent layout algorithms.
 Rendering is deterministic: the same IR yields the same shape tree.
@@ -79,6 +92,17 @@ from a purpose-dependent cursor. See `ROADMAP.md` for the v1 scope and known lim
 The repair loop is closed through `Renderer.build_callback(ir, path)`, which returns a `build` callback
 accepted by `delivery.run_repair_loop`.
 
+## Visual preview
+
+`ppt_agent.preview.rasterize_pptx()` paints a deck to one PNG per slide. It is deliberately
+dependency-light: it reads the PPTX with `python-pptx` and draws with Pillow, so a host without
+LibreOffice or PowerPoint can still *see* what it produced.
+
+That matters beyond convenience. The visual gates in `ppt_agent.visual_regression` run in two modes:
+`rendered` when any rasteriser is available, `structural` otherwise. Before the Pillow backend existed,
+a machine without LibreOffice silently fell to the weaker mode. Now the weaker mode is the last resort
+rather than the default, and the returned status still names the mode and any degraded capabilities.
+
 ## Capability-driven degradation
 
 The core never assumes it can rasterise a deck. `ppt_agent.contracts.negotiate()` matches what the host
@@ -86,7 +110,7 @@ actually grants against what the pipeline would like, and every gap carries a do
 
 | Missing | Degradation |
 |---|---|
-| `render_preview` | Visual critic and regression gates become structural geometry gates |
+| `render_preview` | LibreOffice when present; otherwise the built-in Pillow rasteriser; only with neither does the visual gate fall back to structural geometry |
 | `shell` | External rasterisation and Office automation unavailable; pure-Python path only |
 | `office_automation` | Portable python-pptx renderer is used instead |
 | `browser` | HTML previews are written to disk but not opened |
