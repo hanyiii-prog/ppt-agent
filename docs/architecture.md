@@ -81,6 +81,11 @@ semantic slide → design.design_presentation() → positioned, styled IR → re
 `x/y/w/h` (inches) plus style dicts. Slides that already carry geometry (the Template DNA path) are
 passed through untouched, so an extracted design is never overwritten by the default theme.
 
+The theme is normally a built-in preset, but `ppt_agent.theme.theme_from_dna()` can derive one from
+Template DNA instead — which is what `build --template` uses. The reference deck supplies the
+palette, the font stack and the type scale; the design layer then composes with those tokens
+unchanged, so the layout code stays theme-agnostic either way.
+
 After that, `render_presentation(ir, output)` is the single native code path. `NativePptxRenderer` and
 `HtmlRenderer` both consume the **same** layout resolved by `styling.resolve_layout()`, so a
 cross-engine comparison compares typography and fidelity, not two divergent layout algorithms.
