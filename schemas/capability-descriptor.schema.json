@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hanyiii-prog/ppt-agent/blob/main/schemas/capability-descriptor.schema.json",
+  "title": "PPT Agent Capability Descriptor",
+  "description": "Stable contract returned by PptAgent.capabilities() and the ppt_agent_capabilities MCP tool.",
+  "type": "object",
+  "required": [
+    "core_api_version",
+    "ir_schema_version",
+    "supported_ir_versions",
+    "adapter_protocol_version",
+    "renderer_sdk_version",
+    "benchmark_schema_version",
+    "release_schema_version",
+    "mcp_protocol_versions",
+    "capabilities",
+    "fallbacks",
+    "adapter",
+    "negotiation",
+    "renderers",
+    "host_profiles"
+  ],
+  "properties": {
+    "core_api_version": {"type": "string"},
+    "ir_schema_version": {"type": "string"},
+    "supported_ir_versions": {"type": "array", "items": {"type": "string"}},
+    "adapter_protocol_version": {"type": "string"},
+    "renderer_sdk_version": {"type": "string"},
+    "benchmark_schema_version": {"type": "string"},
+    "release_schema_version": {"type": "string"},
+    "mcp_protocol_versions": {"type": "array", "items": {"type": "string"}},
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "description", "fatal"],
+        "properties": {
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "fatal": {"type": "boolean"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "fallbacks": {
+      "type": "object",
+      "description": "capability -> documented degradation when the host cannot provide it",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["code", "note"],
+        "properties": {
+          "code": {"type": "string"},
+          "note": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "adapter": {"$ref": "#/$defs/adapter"},
+    "negotiation": {"$ref": "#/$defs/negotiation"},
+    "renderers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "editable", "available", "capabilities"],
+        "properties": {
+          "name": {"type": "string"},
+          "display_name": {"type": "string"},
+          "media_type": {"type": "string"},
+          "extension": {"type": "string"},
+          "editable": {"type": "boolean"},
+          "available": {"type": "boolean"},
+          "requires": {"type": "array", "items": {"type": "string"}},
+          "capabilities": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": true
+      }
+    },
+    "host_profiles": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/adapter"}
+    }
+  },
+  "$defs": {
+    "adapter": {
+      "type": "object",
+      "required": ["name", "protocol_version", "declared", "effective"],
+      "properties": {
+        "name": {"type": "string"},
+        "display_name": {"type": "string"},
+        "protocol_version": {"type": "string"},
+        "declared": {"type": "array", "items": {"type": "string"}},
+        "effective": {"type": "array", "items": {"type": "string"}},
+        "tool_prefix": {"type": "string"},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "negotiation": {
+      "type": "object",
+      "required": ["ok", "granted", "missing", "fallbacks", "notes"],
+      "properties": {
+        "ok": {"type": "boolean", "description": "false only when a fatal capability is missing"},
+        "granted": {"type": "array", "items": {"type": "string"}},
+        "missing": {"type": "array", "items": {"type": "string"}},
+        "fallbacks": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .contracts import IR_SCHEMA_VERSION
 from .ir import Component, Presentation, Provenance, Slide
 
 
@@ -104,7 +105,7 @@ def template_dna_to_ir(dna: dict[str, Any], *, source: str | None = None) -> Pre
         },
     }
     return Presentation(
-        version="0.1",
+        version=IR_SCHEMA_VERSION,
         title=str(dna.get("source") or "Imported presentation"),
         slides=slides,
         theme=theme,

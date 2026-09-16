@@ -16,7 +16,7 @@ def _walk_shapes(shapes: list[dict[str, Any]], inherited_parent: str | None = No
 
 
 def build_relationship_graph(dna: dict[str, Any]) -> dict[str, Any]:
-    """Build explicit master->layout->slide inheritance and recursive containment."""
+    """Build explicit master→layout→slide inheritance and recursive containment."""
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     node_ids: set[str] = set()

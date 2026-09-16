@@ -4,6 +4,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .contracts import IR_SCHEMA_VERSION
 from .ir import Component, Presentation, Provenance, Slide
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -122,7 +123,7 @@ def story_to_ir(story: Story) -> Presentation:
             Slide(id=f"slide-{index:02d}", purpose=entry.purpose, claim=entry.claim, components=components)
         )
     return Presentation(
-        version="0.1",
+        version=IR_SCHEMA_VERSION,
         title=story.title,
         slides=slides,
         audience=story.audience,

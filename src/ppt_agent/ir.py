@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 import json
 
+from .contracts import IR_SCHEMA_VERSION, SUPPORTED_IR_VERSIONS
+
 
 @dataclass(frozen=True)
 class Provenance:
@@ -92,6 +94,10 @@ class Presentation:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        # `ir_version` is the stable contract stamp; `version` stays as the
+        # dialect marker for backwards compatibility with V0.x consumers.
+        data["ir_version"] = IR_SCHEMA_VERSION
+        data["version"] = self.version or IR_SCHEMA_VERSION
         data["metadata"] = {
             "title": self.title,
             "audience": self.audience,
@@ -108,8 +114,14 @@ class Presentation:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Presentation":
         meta = data.get("metadata") or {}
+        version = str(
+            data.get("version")
+            or data.get("ir_version")
+            or meta.get("ir_version")
+            or IR_SCHEMA_VERSION
+        )
         return cls(
-            version=str(data.get("version") or "0.1"),
+            version=version,
             title=str(meta.get("title") or data.get("title") or "Untitled Presentation"),
             slides=[
                 Slide.from_dict(item)
@@ -128,6 +140,11 @@ def validate_presentation(data: dict[str, Any]) -> list[str]:
     for key in ("version", "metadata", "slides"):
         if key not in data:
             errors.append(f"missing required field: {key}")
+    version = data.get("version") or data.get("ir_version")
+    if version is not None and str(version) not in SUPPORTED_IR_VERSIONS:
+        errors.append(
+            f"unsupported IR version {version!r}; supported: {', '.join(SUPPORTED_IR_VERSIONS)}"
+        )
     if not isinstance(data.get("slides"), list):
         errors.append("slides must be an array")
         return errors
