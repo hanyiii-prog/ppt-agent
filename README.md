@@ -15,22 +15,28 @@
 - **中文文档：** 当前 README
 - **English:** see the English sections below
 
-## 当前版本：V1.0
+## 当前版本：V1.1
 
-V1.0 是一个**稳定平台**版本。核心能力已全部落地，并补齐了让它可以真正被别的 Agent 调用的三层基础设施：
+V1.1 在 V1.0 的稳定平台之上补上了**渲染质量**这一层。
+
+V1.0 打的是地基（契约 / SDK / MCP / Benchmark / 发布），渲染器只保证"管线跑得通"，产出的是裸文本框堆叠；V1.1 引入真正的设计层，让一份 Markdown 大纲直接变成可以拿去讲的 PPT。
 
 ```text
-稳定契约（IR / Adapter / Renderer / Benchmark / Release 五个版本号）
+V1.0 稳定契约（IR / Adapter / Renderer / Benchmark / Release 五个版本号）
         +
-渲染器 SDK（Native PPTX 引擎 + HTML 视觉引擎，同一套布局算法）
+V1.0 渲染器 SDK（Native PPTX 引擎 + HTML 视觉引擎，同一套布局算法）
         +
-适配器 SDK（能力检测 + 能力协商 + 主机画像）
+V1.0 适配器 SDK（能力检测 + 能力协商 + 主机画像）
         +
-MCP Server（10 个工具，零第三方依赖）
+V1.0 MCP Server（10 个工具，零第三方依赖）
         +
-Benchmark 套件（确定性 / 门禁 / 时延，可复现）
+V1.0 Benchmark 套件（确定性 / 门禁 / 时延，可复现）
         +
-可复现发布流程（哈希清单 + 漂移校验）
+V1.0 可复现发布流程（哈希清单 + 漂移校验）
+        +
+V1.1 设计层（主题令牌 + 版式合成器，在 IR 层产出带几何与样式的图元）
+        +
+V1.1 可视化闭环（PPTX → PNG 光栅预览，门禁由"结构检查"升级为"渲染检查"）
 ```
 
 ## 项目定位
@@ -91,13 +97,31 @@ PPT Agent 不应该从“画页面”开始，而应该先理解：用户是谁 
 
 两个引擎共用 `styling.resolve_layout()` 这一份布局算法。这一点是刻意的：如果两个引擎各自布局，跨引擎比对就失去了意义。
 
-### 6. 适配器 SDK：能力检测与协商
+### 6. 设计层：让 IR 变成能用的页面
+
+一份大纲变成 PPT，中间缺的那一环是**版式设计**。V1.1 把这一环独立成一层：
+
+```text
+语义幻灯片（purpose + 标题 + 要点）
+        ↓  ppt_agent.design（由主题令牌驱动）
+带几何与样式的图元（色带 / 圆点 / 装饰线 / 文本块）
+        ↓  ppt_agent.styling.resolve_layout
+两个渲染器（native-pptx / html）共用同一份结果
+```
+
+- **`theme.py`** —— 主题令牌：调色板、字体、字号阶梯、版心与节奏。换主题即换整套视觉，不必碰布局代码。
+- **`design.py`** —— 版式合成器：封面 / 目录 / 内容 / 章节 / 结尾五种版式，输出纯 IR，所以两个引擎自动共享同一份设计。
+- **已带绝对几何的幻灯片**（Template DNA 注入的那条路）原样放过，不会被重新设计。
+
+设计在 IR 层落地，而不是在两个渲染器里各写一遍——这是跨引擎比对能成立的前提。
+
+### 7. 适配器 SDK：能力检测与协商
 
 核心不假设自己一定能栅格化 PPT。`negotiate()` 把宿主**实际具备**的能力和流水线**希望具备**的能力做匹配，每个缺口都带一条有记录的降级路径：
 
 | 缺失能力 | 降级行为 |
 |---|---|
-| `render_preview` | 视觉评审与回归门禁降级为结构几何门禁 |
+| `render_preview` | 优先 LibreOffice；缺失时退回内置 Pillow 光栅器；两者都没有才降级为结构几何门禁 |
 | `shell` | 外部栅格化与 Office 自动化不可用，只走纯 Python 路径 |
 | `office_automation` | 使用便携的 python-pptx 渲染器 |
 | `browser` | HTML 预览落盘但不自动打开 |
@@ -106,11 +130,11 @@ PPT Agent 不应该从“画页面”开始，而应该先理解：用户是谁 
 
 只有 `filesystem` 是致命能力。**门禁不会被静默跳过**——返回值永远会说明哪些门禁真正跑了、哪些能力被降级了。
 
-### 7. Visual QA：生成后必须检查
+### 8. Visual QA：生成后必须检查
 
 生成 PPT 后自动渲染页面，并检查内容溢出、元素重叠、页面越界、字体可读性、信息密度、留白、视觉层级、页面一致性、图表完整性、模板一致性、页面之间的重复与节奏。
 
-### 8. Repair Loop：发现问题自动修复
+### 9. Repair Loop：发现问题自动修复
 
 ```text
 Generate → Render → Critic → 发现问题 → Repair → Rebuild → Render → Recheck
@@ -118,11 +142,11 @@ Generate → Render → Critic → 发现问题 → Repair → Rebuild → Rende
 
 直到通过质量 Gate，或者达到最大迭代次数。
 
-### 9. Evidence / Fact Lock：重要数据可追溯
+### 10. Evidence / Fact Lock：重要数据可追溯
 
 对于数字、指标、结论等重要内容，可以建立来源映射。如果生成结果与事实源不一致，可以让构建直接失败，而不是悄悄输出错误数据。
 
-### 10. MCP Server：任何 MCP 宿主都能直接调用
+### 11. MCP Server：任何 MCP 宿主都能直接调用
 
 ```bash
 ppt-agent-mcp --workspace /path/to/sandbox
@@ -186,6 +210,8 @@ ppt-agent-mcp --workspace /path/to/sandbox
 ppt-agent/
 ├── src/ppt_agent/
 │   ├── contracts.py       # 稳定版本 + 能力模型 + IR 版本校验 + 协商
+│   ├── theme.py           # 主题令牌：调色板 / 字体 / 字号阶梯 / 版心节奏
+│   ├── design.py          # 版式合成器：语义幻灯片 → 带几何与样式的 IR 图元
 │   ├── styling.py         # 共享样式约定 + 唯一一份布局算法
 │   ├── ir.py              # Universal IR 数据模型
 │   ├── markdown.py        # Markdown → IR
@@ -200,6 +226,7 @@ ppt-agent/
 │   ├── page_validation.py # 几何 / 空白页门禁（渲染版 + 结构版）
 │   ├── visual_critic.py   # 视觉评审规则
 │   ├── visual_regression.py # 渲染 + SSIM/MAE 对比 + 栅格器探测
+│   ├── preview.py         # PPTX → 逐页 PNG 光栅预览（Pillow 兜底后端）
 │   ├── fact_registry.py   # 事实登记与溯源校验
 │   ├── delivery.py        # 交付门禁 + 有界修复循环
 │   ├── benchmark.py       # 可复现 Benchmark 套件
@@ -210,7 +237,7 @@ ppt-agent/
 ├── schemas/           # 能力描述 / 交付清单 Schema
 ├── scripts/           # 发布脚本
 ├── skills/            # 可移植 Skill
-├── tests/             # 自动化测试（152 项）
+├── tests/             # 自动化测试（166 项）
 ├── docs/              # 技术文档
 └── .github/           # GitHub Actions / Issue / PR 配置
 ```
@@ -232,6 +259,12 @@ ppt-agent capabilities
 # Markdown → IR → 可编辑 PPTX + HTML 预览 + 门禁 + 交付清单
 ppt-agent build outline.md -o workspace --stem deck
 
+# 同一条命令顺带出逐页 PNG 预览（不装 LibreOffice 也能看）
+ppt-agent build outline.md -o workspace --stem deck --preview
+
+# 已有 deck 单独出图
+ppt-agent preview workspace/deck.pptx -o workspace/preview --dpi 120
+
 # 参考 PPT → Template DNA → IR
 ppt-agent pptx-to-ir reference.pptx -o ir.json
 
@@ -252,9 +285,10 @@ ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 ppt-agent-mcp --workspace ./sandbox
 ```
 
-新增命令一览：`build`、`capabilities`、`audit-facts`、`benchmark`、`mcp`、`ir-to-html`、`release-manifest`、`release-verify`。
+新增命令一览：`build`、`capabilities`、`audit-facts`、`benchmark`、`preview`、`mcp`、`ir-to-html`、`release-manifest`、`release-verify`。
 
-> 渲染器支持文本 / 形状 / 图片 / 表格 / 图表（占位）/ 分组，绝对坐标与自动流式排版，填充透明度（OOXML `a:alpha`）；渐变暂降级为纯色。两个引擎的已知限制见 [`ROADMAP.md`](ROADMAP.md)。
+> 语义幻灯片会先经 `design.py` 合成版式（主题驱动），再交给渲染器；已带绝对几何的 IR 直接透传。
+> 渲染器支持文本 / 形状 / 图片 / 表格 / 图表（占位）/ 分组，椭圆图元，绝对坐标与自动流式排版，填充透明度（OOXML `a:alpha`）；渐变暂降级为纯色。两个引擎的已知限制见 [`ROADMAP.md`](ROADMAP.md)。
 
 ## Benchmark
 
@@ -316,7 +350,7 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 ## 测试
 
 ```bash
-pytest -q                      # 152 项
+pytest -q                      # 166 项
 ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 python scripts/release.py build && python scripts/release.py verify
 ```
@@ -329,10 +363,9 @@ Its goal is not merely to generate a `.pptx`, but to provide a reusable, verifia
 
 `source analysis → story architecture → slide planning → visual design → native PPTX rendering → visual QA → automatic repair`
 
-V1.0 is the stable-platform release: five versioned contracts (IR, adapter, renderer, benchmark,
-release), a renderer SDK with native and HTML engines sharing one layout algorithm, an adapter SDK with
-capability detection and negotiation, a dependency-free MCP stdio server exposing ten tools, a
-reproducible benchmark suite, and a hash-manifested release process.
+V1.1 keeps the V1.0 stable platform and adds the layer it was missing: a **design layer** that turns
+semantic slides into positioned, styled primitives behind a theme token system, plus a self-contained
+Pillow rasteriser, so visual gates run in `mode=rendered` even on a machine without LibreOffice.
 
 The core architecture is model-agnostic and agent-host-agnostic. It is designed to support different
 LLMs, agent hosts, rendering engines and Office environments through explicit adapters.
