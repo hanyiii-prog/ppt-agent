@@ -5,18 +5,29 @@ from pathlib import Path
 from typing import Any
 
 from .ir import Component, Presentation
+from .styling import (
+    DEFAULT_SLIDE_H_IN,
+    DEFAULT_SLIDE_W_IN,
+    EMU_PER_INCH,
+    FLOW_GAP_IN,
+    MARGIN_IN,
+    TEXT_COMPONENT_TYPES,
+    TITLE_PURPOSES,
+    default_font_size,
+    estimate_flow_height,
+    font_style_of,
+    group_children,
+    has_geometry,
+    normalize_alignment,
+    normalize_color,
+    normalize_opacity,
+    resolve_layout,
+    slide_size_inches,
+)
 
-EMU_PER_INCH = 914400
-DEFAULT_SLIDE_W_IN = 13.333
-DEFAULT_SLIDE_H_IN = 7.5
-MARGIN_IN = 0.7
-FLOW_GAP_IN = 0.16
-
-_TEXT_TYPES = {
-    "text", "paragraph", "title", "subtitle", "body", "bullet",
-    "caption", "label", "heading", "quote",
-}
-_TITLE_PURPOSES = {"cover", "closing", "title", "section"}
+# Backwards-compatible private aliases: these names shipped in V0.3.
+_TEXT_TYPES = TEXT_COMPONENT_TYPES
+_TITLE_PURPOSES = TITLE_PURPOSES
 
 try:  # pragma: no cover - import guard is environment dependent
     from pptx import Presentation as _PptxPresentation
@@ -36,31 +47,17 @@ except ImportError:  # pragma: no cover
 def _rgb(value: Any):
     if not _PPTX_AVAILABLE or value is None:
         return None
-    text = str(value).strip().lstrip("#")
-    if len(text) == 3:
-        text = "".join(ch * 2 for ch in text)
-    if len(text) != 6:
+    text = normalize_color(value)
+    if text is None:
         return None
     try:
-        return _RGBColor.from_string(text.upper())
+        return _RGBColor.from_string(text)
     except (ValueError, TypeError):
         return None
 
 
 def _opacity(fill: Any) -> float | None:
-    if not isinstance(fill, dict):
-        return None
-    if isinstance(fill.get("opacity"), (int, float)):
-        return max(0.0, min(1.0, float(fill["opacity"])))
-    if isinstance(fill.get("transparency"), (int, float)):
-        return max(0.0, min(1.0, 1.0 - float(fill["transparency"])))
-    alpha = fill.get("alpha")
-    if isinstance(alpha, (int, float)):
-        value = float(alpha)
-        if value > 1:
-            value /= 100000.0
-        return max(0.0, min(1.0, value))
-    return None
+    return normalize_opacity(fill)
 
 
 def _set_solid_alpha(shape: Any, opacity: float) -> None:
@@ -119,8 +116,7 @@ def _apply_text(shape: Any, comp: Component, default_size_pt: float) -> None:
     if text is None and isinstance(comp.data, dict):
         text = comp.data.get("text")
     text = "" if text is None else str(text)
-    style = comp.style if isinstance(comp.style, dict) else {}
-    font_style = style.get("font") if isinstance(style.get("font"), dict) else {}
+    font_style = font_style_of(comp)
     size_pt = font_style.get("size_pt", default_size_pt)
     tf = shape.text_frame
     tf.word_wrap = True
@@ -133,13 +129,14 @@ def _apply_text(shape: Any, comp: Component, default_size_pt: float) -> None:
     for line in lines[1:]:
         tf.add_paragraph().text = line
     alignment = None
-    if isinstance(font_style.get("alignment"), str):
+    normalized = normalize_alignment(font_style.get("alignment"))
+    if normalized:
         alignment = {
             "left": _PP_ALIGN.LEFT,
             "center": _PP_ALIGN.CENTER,
             "right": _PP_ALIGN.RIGHT,
             "justify": _PP_ALIGN.JUSTIFY,
-        }.get(font_style["alignment"].lower())
+        }[normalized]
     font_rgb = _rgb(font_style.get("rgb"))
     for paragraph in tf.paragraphs:
         if alignment is not None:
@@ -159,7 +156,7 @@ def _apply_text(shape: Any, comp: Component, default_size_pt: float) -> None:
 
 
 def _has_geometry(comp: Component) -> bool:
-    return all(isinstance(value, (int, float)) for value in (comp.x, comp.y, comp.w, comp.h))
+    return has_geometry(comp)
 
 
 def _box(comp: Component) -> tuple[Any, Any, Any, Any]:
@@ -167,15 +164,7 @@ def _box(comp: Component) -> tuple[Any, Any, Any, Any]:
 
 
 def _estimate_flow_height(comp: Component, width_in: float, default_size_pt: float) -> float:
-    text = comp.text if comp.text is not None else (comp.data.get("text") if isinstance(comp.data, dict) else None)
-    text = "" if text is None else str(text)
-    chars_per_line = max(12.0, width_in * 11.0)
-    lines = 0
-    for segment in text.split("\n"):
-        lines += max(1, int(len(segment) / chars_per_line) + (1 if len(segment) % chars_per_line else 0))
-    lines = max(1, lines)
-    line_height = max(0.32, default_size_pt / 72.0 * 1.35)
-    return round(lines * line_height + 0.12, 3)
+    return estimate_flow_height(comp, width_in, default_size_pt)
 
 
 def _add_placeholder(slide: Any, box: tuple[Any, Any, Any, Any], label: str) -> Any:
@@ -241,23 +230,10 @@ def _render_component(slide: Any, comp: Component, box: tuple[Any, Any, Any, Any
         _add_placeholder(slide, box, f"[chart] {(comp.data or {}).get('name') if isinstance(comp.data, dict) else ''}".strip())
         return
     if ctype == "group":
-        children = []
-        if isinstance(comp.data, dict):
-            fidelity = comp.data.get("fidelity")
-            if isinstance(fidelity, dict) and isinstance(fidelity.get("children"), list):
-                children = fidelity["children"]
+        children = [child for child in group_children(comp) if _has_geometry(child)]
         if children:
-            from .dna_to_ir import _component as _dna_component
-
-            source = "render"
-            if comp.provenance:
-                source = comp.provenance[0].source_id
             for child in children:
-                if not isinstance(child, dict):
-                    continue
-                child_comp = _dna_component(child, source)
-                if _has_geometry(child_comp):
-                    _render_component(slide, child_comp, _box(child_comp), default_size_pt)
+                _render_component(slide, child, _box(child), default_size_pt)
             return
         _add_placeholder(slide, box, f"[group] {comp.id or ''}".strip())
         return
@@ -278,15 +254,7 @@ def _render_component(slide: Any, comp: Component, box: tuple[Any, Any, Any, Any
 
 
 def _default_size(comp: Component, slide_purpose: str) -> float:
-    style = comp.style if isinstance(comp.style, dict) else {}
-    font_style = style.get("font") if isinstance(style.get("font"), dict) else {}
-    if isinstance(font_style.get("size_pt"), (int, float)):
-        return float(font_style["size_pt"])
-    if (comp.type or "").lower() in {"title", "heading"}:
-        return 36.0
-    if slide_purpose in _TITLE_PURPOSES:
-        return 28.0
-    return 20.0
+    return default_font_size(comp, slide_purpose)
 
 
 def _apply_background(slide: Any, slide_data: Any) -> None:
@@ -317,14 +285,7 @@ def _blank_layout(prs: Any) -> Any:
 
 
 def _slide_size(presentation: Presentation) -> tuple[float, float]:
-    theme = presentation.theme if isinstance(presentation.theme, dict) else {}
-    size = theme.get("slide_size_inches")
-    if isinstance(size, dict):
-        width = size.get("width")
-        height = size.get("height")
-        if isinstance(width, (int, float)) and width > 0 and isinstance(height, (int, float)) and height > 0:
-            return float(width), float(height)
-    return DEFAULT_SLIDE_W_IN, DEFAULT_SLIDE_H_IN
+    return slide_size_inches(presentation)
 
 
 def render_presentation(presentation: Presentation, output: str | Path, *, iteration: int | None = None) -> Path:
@@ -341,24 +302,13 @@ def render_presentation(presentation: Presentation, output: str | Path, *, itera
     for slide_ir in presentation.slides:
         slide = prs.slides.add_slide(layout)
         _apply_background(slide, slide_ir.data)
-        purpose = (slide_ir.purpose or "content").lower()
-        content_width = width_in - 2 * MARGIN_IN
-        cursor = 0.6 if purpose not in _TITLE_PURPOSES else 1.6
-
-        for index, comp in enumerate(slide_ir.components):
-            default_size = _default_size(comp, purpose)
-            if _has_geometry(comp):
-                box = _box(comp)
-            else:
-                if purpose in _TITLE_PURPOSES and index == 0:
-                    default_size = max(default_size, 36.0)
-                    height = max(_estimate_flow_height(comp, content_width, default_size), 0.9)
-                    box = (_Inches(MARGIN_IN), _Inches((height_in - height) / 2), _Inches(content_width), _Inches(height))
-                else:
-                    height = _estimate_flow_height(comp, content_width, default_size)
-                    box = (_Inches(MARGIN_IN), _Inches(cursor), _Inches(content_width), _Inches(height))
-                    cursor += height + FLOW_GAP_IN
-            _render_component(slide, comp, box, default_size)
+        for box in resolve_layout(slide_ir, width_in, height_in):
+            _render_component(
+                slide,
+                box.component,
+                (_Inches(box.x), _Inches(box.y), _Inches(box.w), _Inches(box.h)),
+                box.font_pt,
+            )
 
         if slide_ir.speaker_notes:
             slide.notes_slide.notes_text_frame.text = slide_ir.speaker_notes
