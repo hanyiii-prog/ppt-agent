@@ -15,7 +15,9 @@
 - **中文文档：** 当前 README
 - **English:** see the English sections below
 
-## 当前版本：V1.1
+## 当前版本：V1.2
+
+V1.2 补上了**模板闭环**：`build --template 你的模板.pptx` 会从参考 PPT 提取配色、字体与字号阶梯，让设计继承那份 PPT 的视觉身份，而不是套用内置预设。
 
 V1.1 在 V1.0 的稳定平台之上补上了**渲染质量**这一层。
 
@@ -37,6 +39,8 @@ V1.0 可复现发布流程（哈希清单 + 漂移校验）
 V1.1 设计层（主题令牌 + 版式合成器，在 IR 层产出带几何与样式的图元）
         +
 V1.1 可视化闭环（PPTX → PNG 光栅预览，门禁由"结构检查"升级为"渲染检查"）
+        +
+V1.2 模板闭环（Template DNA → 主题令牌，产物继承参考 PPT 的配色与字体）
 ```
 
 ## 项目定位
@@ -112,6 +116,7 @@ PPT Agent 不应该从“画页面”开始，而应该先理解：用户是谁 
 - **`theme.py`** —— 主题令牌：调色板、字体、字号阶梯、版心与节奏。换主题即换整套视觉，不必碰布局代码。
 - **`design.py`** —— 版式合成器：封面 / 目录 / 内容 / 章节 / 结尾五种版式，输出纯 IR，所以两个引擎自动共享同一份设计。
 - **已带绝对几何的幻灯片**（Template DNA 注入的那条路）原样放过，不会被重新设计。
+- **主题可以从模板推导** —— `theme_from_dna()` 把 Template DNA 的配色、字体与字号阶梯映射成主题令牌，所以 `build --template` 出来的页面复用参考 PPT 的视觉身份。正文墨色只在模板的深色槽与主色同色系时才采信，避免把 Office 默认色板的残留当成设计决策。
 
 设计在 IR 层落地，而不是在两个渲染器里各写一遍——这是跨引擎比对能成立的前提。
 
@@ -237,7 +242,7 @@ ppt-agent/
 ├── schemas/           # 能力描述 / 交付清单 Schema
 ├── scripts/           # 发布脚本
 ├── skills/            # 可移植 Skill
-├── tests/             # 自动化测试（166 项）
+├── tests/             # 自动化测试（179 项）
 ├── docs/              # 技术文档
 └── .github/           # GitHub Actions / Issue / PR 配置
 ```
@@ -262,6 +267,9 @@ ppt-agent build outline.md -o workspace --stem deck
 # 同一条命令顺带出逐页 PNG 预览（不装 LibreOffice 也能看）
 ppt-agent build outline.md -o workspace --stem deck --preview
 
+# 用你的模板：产物继承该 PPT 的配色、字体与字号阶梯
+ppt-agent build outline.md -o workspace --stem deck --template 你的模板.pptx
+
 # 已有 deck 单独出图
 ppt-agent preview workspace/deck.pptx -o workspace/preview --dpi 120
 
@@ -285,9 +293,10 @@ ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 ppt-agent-mcp --workspace ./sandbox
 ```
 
-新增命令一览：`build`、`capabilities`、`audit-facts`、`benchmark`、`preview`、`mcp`、`ir-to-html`、`release-manifest`、`release-verify`。
+新增命令一览：`build`、`capabilities`、`audit-facts`、`benchmark`、`preview`、`mcp`、`ir-to-html`、`release-manifest`、`release-verify`。 `build` 另有 `--template`（模板驱动主题）与 `--preview`（逐页 PNG）两个开关。
 
 > 语义幻灯片会先经 `design.py` 合成版式（主题驱动），再交给渲染器；已带绝对几何的 IR 直接透传。
+> 给了 `--template` 时，主题令牌改由模板 DNA 推导（配色 / 字体 / 字号阶梯），内置预设不再参与。
 > 渲染器支持文本 / 形状 / 图片 / 表格 / 图表（占位）/ 分组，椭圆图元，绝对坐标与自动流式排版，填充透明度（OOXML `a:alpha`）；渐变暂降级为纯色。两个引擎的已知限制见 [`ROADMAP.md`](ROADMAP.md)。
 
 ## Benchmark
@@ -350,7 +359,7 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 ## 测试
 
 ```bash
-pytest -q                      # 166 项
+pytest -q                      # 179 项
 ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 python scripts/release.py build && python scripts/release.py verify
 ```
@@ -366,6 +375,10 @@ Its goal is not merely to generate a `.pptx`, but to provide a reusable, verifia
 V1.1 keeps the V1.0 stable platform and adds the layer it was missing: a **design layer** that turns
 semantic slides into positioned, styled primitives behind a theme token system, plus a self-contained
 Pillow rasteriser, so visual gates run in `mode=rendered` even on a machine without LibreOffice.
+
+V1.2 closes the template loop: `build --template ref.pptx` derives the theme tokens from the
+reference deck Template DNA — palette, fonts and type scale — so the output carries that deck
+visual identity instead of a built-in preset.
 
 The core architecture is model-agnostic and agent-host-agnostic. It is designed to support different
 LLMs, agent hosts, rendering engines and Office environments through explicit adapters.
