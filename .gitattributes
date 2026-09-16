@@ -1,0 +1,20 @@
+# Normalise line endings so the release digest is operating-system independent.
+# Without this, a Windows checkout would hash different bytes than a Linux one.
+* text=auto eol=lf
+
+# Binary assets must never be translated.
+*.pptx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.zip binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+
+# Generated artifacts: exclude from language statistics and merge noise.
+dist/** -diff -merge
+benchmarks/**/run-*/** -diff

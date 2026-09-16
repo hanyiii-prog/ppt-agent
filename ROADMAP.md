@@ -30,34 +30,37 @@ Status legend: `[x]` shipped in code, `[~]` partial / v1 scope, `[ ]` not starte
 ## V0.4 — Evidence Safety
 - [x] Fact Registry (`ppt_agent.fact_registry`)
 - [x] provenance graph (claims carry `Provenance`)
-- [~] Fact Lock (support audit via `audit_presentation`)
-- [~] source-to-slide traceability
+- [x] Fact Lock (support audit via `audit_presentation`; `ppt-agent audit-facts`)
+- [x] source-to-slide traceability (`Provenance.locator` preserved end to end)
 
 ## V0.5 — Critic + Repair
 - [x] visual critic (`ppt_agent.visual_critic`)
 - [x] layout/density scoring (`ppt_agent.visual_critic`, `visual_grammar`)
 - [x] targeted repair tasks (`delivery._repair_requests`)
 - [x] bounded rebuild loop (`delivery.run_repair_loop`)
-- [x] renderer build callback (`renderer.make_ir_build`)
+- [x] renderer build callback (`Renderer.build_callback`)
 
 ## V0.6 — Story + Agent Interoperability
 - [x] Story Architect (`ppt_agent.story`)
-- [ ] MCP server
-- [ ] generic adapter
-- [ ] capability negotiation
+- [x] MCP server (`ppt_agent.mcp`, dependency-free stdio transport, 10 tools)
+- [x] generic adapter (`ppt_agent.adapters.HostAdapter`, `GenericAdapter`, `LocalAdapter`)
+- [x] capability negotiation (`ppt_agent.contracts.negotiate`, `HostAdapter.effective`)
 
 ## V0.7 — Host Adapters
-- [ ] Codex
-- [ ] WorkBuddy
-- [ ] 豆包工作
-- [ ] additional agent hosts
+- [x] Codex (host profile)
+- [x] WorkBuddy (host profile)
+- [x] 豆包工作 (host profile)
+- [x] Claude (host profile)
+- [x] ChatGPT (host profile)
+- [x] additional agent hosts (declarative profiles via `create_adapter` / `HostAdapter`)
 
 ## V1.0 — Stable Platform
-- [ ] stable IR contract
-- [ ] renderer SDK
-- [ ] adapter SDK
-- [ ] benchmark suite
-- [ ] reproducible release process
+- [x] stable IR contract (`ppt_agent.contracts`, `ir_version` stamp, `supported_ir_versions`)
+- [x] renderer SDK (`ppt_agent.renderers`: protocol, registry, preference order, HTML visual engine)
+- [x] adapter SDK (`ppt_agent.adapters`, capability descriptor schema)
+- [x] benchmark suite (`ppt_agent.benchmark`, `benchmarks/cases`, determinism assertions)
+- [x] reproducible release process (`ppt_agent.release`, `scripts/release.py`, `release.yml`)
+- [x] unified SDK facade (`ppt_agent.sdk.PptAgent`) shared by CLI, MCP and integrations
 
 ## Renderer v1 scope
 
@@ -69,4 +72,26 @@ The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emit
 - Slide background fill, speaker notes, per-deck slide size from `theme.slide_size_inches`.
 - Group components recursively render their captured children.
 
-Known v1 limits (tracked for V1.0): gradient fills fall back to solid, chart components render as labelled placeholders, embedded image bytes require `data.bytes`/`data.path`.
+Layout is resolved once in `ppt_agent.styling.resolve_layout()` and consumed by both the native and HTML
+engines, so a cross-engine comparison compares fidelity rather than two layout algorithms.
+
+The HTML engine (`src/ppt_agent/renderers/html.py`) emits one self-contained, printable deck: inline
+styles, base64-inlined assets, escaped text, `@media print` page breaks.
+
+## Known limits
+
+Tracked for the next cycle:
+
+- gradient fills fall back to solid in both engines
+- `chart` components render as labelled placeholders on both engines
+- embedded image bytes require `data.bytes`/`data.path`
+- flow layout estimates text height arithmetically rather than measuring glyphs, so a very long single
+  block can still overflow; the page gate catches it rather than the layout preventing it
+- the HTML engine positions text boxes from the same layout as the native engine, so text that spills
+  in the browser does not reflow the following blocks
+
+## Contract compatibility policy
+
+- `IR_SCHEMA_VERSION` `1.0` is current; dialects in `SUPPORTED_IR_VERSIONS` remain readable.
+- A dialect is only removed with a major bump and a migration note here.
+- `0.1` is retained so decks written by V0.x still load.

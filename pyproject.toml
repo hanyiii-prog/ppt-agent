@@ -4,19 +4,32 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ppt-agent"
-version = "0.1.0"
+version = "1.0.0"
 description = "Portable agent-native presentation engineering framework"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
+keywords = ["presentation", "pptx", "agent", "mcp", "ir", "template-dna"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Office/Business :: Office Suites",
+  "Typing :: Typed",
+]
 
 [project.optional-dependencies]
 pptx = ["python-pptx>=0.6.21"]
 qa = ["Pillow>=10.0", "numpy>=1.26"]
 test = ["pytest>=8.0"]
+mcp = []
 
 [project.scripts]
 ppt-agent = "ppt_agent.cli:main"
+ppt-agent-mcp = "ppt_agent.mcp.server:main"
+ppt-agent-release = "ppt_agent.release:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ppt_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
