@@ -6,6 +6,8 @@ from typing import Any, Protocol
 
 from PIL import Image
 
+from .visual_regression import flatten_pixels
+
 
 @dataclass(frozen=True)
 class CriticFinding:
@@ -42,7 +44,7 @@ class HeuristicVisualCritic:
         with Image.open(image) as im:
             rgb = im.convert("RGB")
             small = rgb.resize((256, 144))
-            pixels = list(small.getdata())
+            pixels = flatten_pixels(small)
             near_white = sum(1 for p in pixels if min(p) >= 250) / len(pixels)
             if near_white >= self.blank_threshold:
                 findings.append(CriticFinding(

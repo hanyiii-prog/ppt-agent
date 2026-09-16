@@ -30,6 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
     convert.add_argument("source", type=Path); convert.add_argument("-o", "--output", required=True, type=Path)
     ir_pptx = sub.add_parser("ir-to-pptx", help="Render Universal IR JSON into an editable PPTX")
     ir_pptx.add_argument("source", type=Path); ir_pptx.add_argument("-o", "--output", required=True, type=Path)
+    ir_html = sub.add_parser("ir-to-html", help="Render Universal IR JSON into a self-contained HTML deck")
+    ir_html.add_argument("source", type=Path); ir_html.add_argument("-o", "--output", required=True, type=Path)
     render = sub.add_parser("render-pptx", help="Render every PPTX slide to PNG")
     render.add_argument("source", type=Path); render.add_argument("-o", "--output", required=True, type=Path)
     visual = sub.add_parser("visual-regression", help="Render two decks and compare every page")
@@ -42,6 +44,45 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--workspace", type=Path); gate.add_argument("--reference", type=Path)
     gate.add_argument("--ssim", type=float, default=0.995); gate.add_argument("--mae", type=float, default=0.005)
     gate.add_argument("--mismatch", type=float, default=0.01)
+
+    # --- V1.0 additions ---------------------------------------------------
+    build = sub.add_parser("build", help="Plan, build and gate a deck end to end")
+    build.add_argument("source", type=Path, nargs="?", help="Markdown source; omit when using --ir")
+    build.add_argument("--ir", type=Path, help="Build from an existing IR JSON instead of Markdown")
+    build.add_argument("-o", "--out-dir", required=True, type=Path)
+    build.add_argument("--stem", default="presentation", help="Base filename for the artifacts")
+    build.add_argument("--title"); build.add_argument("--audience"); build.add_argument("--objective")
+    build.add_argument("--renderer", help="Renderer name: native-pptx (default) or html")
+    build.add_argument("--reference", type=Path, help="Reference deck for visual regression")
+    build.add_argument("--no-gate", action="store_true", help="Skip the delivery gate")
+    build.add_argument("--no-html", action="store_true", help="Skip the HTML preview")
+    build.add_argument("--facts", type=Path, help="Fact JSON (array of {claim, source_id, locator}) for the fact lock")
+
+    caps = sub.add_parser("capabilities", help="Print the contract, host capabilities and renderer inventory")
+    caps.add_argument("--host", help="Host profile: codex, workbuddy, doubao, claude, chatgpt")
+    caps.add_argument("--json", action="store_true", help="Emit raw JSON instead of a summary")
+
+    audit = sub.add_parser("audit-facts", help="Check every IR claim against a fact registry")
+    audit.add_argument("source", type=Path, help="IR JSON to audit")
+    audit.add_argument("--facts", required=True, type=Path, help="Fact JSON (array of {claim, source_id, locator})")
+    audit.add_argument("-o", "--output", type=Path)
+
+    bench = sub.add_parser("benchmark", help="Run the reproducible benchmark suite over a cases directory")
+    bench.add_argument("cases", type=Path, nargs="?", default=Path("benchmarks/cases"))
+    bench.add_argument("-o", "--output", required=True, type=Path, help="Benchmark report JSON")
+    bench.add_argument("--workspace", type=Path, help="Where to write intermediate runs")
+
+    mcp = sub.add_parser("mcp", help="Run the MCP stdio server (alias of ppt-agent-mcp)")
+    mcp.add_argument("--workspace", type=Path, default=None)
+    mcp.add_argument("--host", default=None)
+
+    release = sub.add_parser("release-manifest", help="Write a deterministic release manifest")
+    release.add_argument("--root", type=Path, default=Path.cwd())
+    release.add_argument("-o", "--output", type=Path, default=Path("dist/release-manifest.json"))
+
+    verify = sub.add_parser("release-verify", help="Verify the working tree against a release manifest")
+    verify.add_argument("--root", type=Path, default=Path.cwd())
+    verify.add_argument("--manifest", type=Path, default=Path("dist/release-manifest.json"))
     return parser
 
 
@@ -53,8 +94,34 @@ def _read_json(path: Path) -> dict:
 
 
 def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from .textio import write_json_lf
+
+    write_json_lf(path, payload)
+
+
+def _agent(host: str | None = None):
+    from .adapters import create_adapter
+    from .sdk import PptAgent
+
+    return PptAgent(create_adapter(host) if host else None)
+
+
+def _print_capabilities(payload: dict) -> None:
+    print(f"core API      : {payload['core_api_version']}")
+    print(f"IR schema     : {payload['ir_schema_version']} (supported: {', '.join(payload['supported_ir_versions'])})")
+    adapter = payload["adapter"]
+    print(f"adapter       : {adapter['display_name']} [{adapter['name']}]")
+    print(f"  declared    : {', '.join(adapter['declared']) or '-'}")
+    print(f"  effective   : {', '.join(adapter['effective']) or '-'}")
+    negotiation = payload["negotiation"]
+    print(f"  negotiation : {'ok' if negotiation['ok'] else 'blocked'}")
+    for note in negotiation["notes"]:
+        print(f"    - {note}")
+    print("renderers     :")
+    for renderer in payload["renderers"]:
+        state = "ready" if renderer["available"] else "unavailable"
+        print(f"  - {renderer['name']} ({state}, editable={renderer['editable']})")
+    print("host profiles : " + ", ".join(profile["name"] for profile in payload["host_profiles"]))
 
 
 def main() -> int:
@@ -78,6 +145,14 @@ def main() -> int:
         from .renderer import render_presentation
         presentation = Presentation.from_dict(_read_json(args.source))
         output = render_presentation(presentation, args.output)
+        print(f"wrote {output} ({len(presentation.slides)} slides)"); return 0
+    if args.command == "ir-to-html":
+        from .renderers import render_html_deck
+        from .ir import Presentation
+        presentation = Presentation.from_dict(_read_json(args.source))
+        output, warnings = render_html_deck(presentation, args.output)
+        for warning in warnings:
+            print(f"warning: {warning}")
         print(f"wrote {output} ({len(presentation.slides)} slides)"); return 0
     if args.command == "render-pptx":
         from .visual_regression import render_pptx
@@ -110,6 +185,83 @@ def main() -> int:
             for page in visual_gate.pages:
                 print(f"page {page.page}: SSIM={page.ssim:.5f} MAE={page.mae:.5f} mismatch={page.mismatch_ratio:.3%} {'PASS' if page.passed else 'FAIL'}")
         print(f"production delivery gate: {'PASS' if result['passed'] else 'FAIL'}"); return 0 if result["passed"] else 2
+    if args.command == "capabilities":
+        payload = _agent(args.host).capabilities()
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            _print_capabilities(payload)
+        return 0
+    if args.command == "audit-facts":
+        agent = _agent()
+        presentation = agent.load_ir(args.source)
+        facts = json.loads(args.facts.read_text(encoding="utf-8"))
+        report = agent.audit_facts(presentation, facts)
+        if args.output:
+            _write_json(args.output, report)
+        for finding in report["findings"]:
+            if not finding["supported"]:
+                print(f"unsupported: slide={finding['slide']} component={finding['component']} claim={finding['claim'][:80]}")
+        print(f"fact lock: {'PASS' if report['passed'] else 'FAIL'} ({report['supported']}/{report['checked']} claims supported)")
+        return 0 if report["passed"] else 2
+    if args.command == "build":
+        agent = _agent()
+        facts = json.loads(args.facts.read_text(encoding="utf-8")) if args.facts else None
+        outcome = agent.build(
+            out_dir=args.out_dir,
+            markdown=None if args.ir else args.source.read_text(encoding="utf-8"),
+            presentation=agent.load_ir(args.ir) if args.ir else None,
+            title=args.title, audience=args.audience, objective=args.objective,
+            renderer=args.renderer, reference=args.reference,
+            gate=not args.no_gate, emit_html=not args.no_html,
+            facts=facts, stem=args.stem,
+        )
+        for warning in outcome.warnings:
+            print(f"warning: {warning}")
+        print(f"ir    : {outcome.ir_path}")
+        print(f"pptx  : {outcome.pptx_path} (renderer={outcome.renderer})")
+        if outcome.html_path:
+            print(f"html  : {outcome.html_path}")
+        if outcome.gate:
+            print(f"gate  : {'PASS' if outcome.gate['passed'] else 'FAIL'} (mode={outcome.gate['mode']}, degraded={outcome.gate['degraded'] or 'none'})")
+        if outcome.fact_audit:
+            print(f"facts : {'PASS' if outcome.fact_audit['passed'] else 'FAIL'} ({outcome.fact_audit['supported']}/{outcome.fact_audit['checked']} supported)")
+        _write_json(Path(args.out_dir) / f"{args.stem}-build.json", outcome.to_dict())
+        print(f"build : {'PASS' if outcome.ok else 'FAIL'} — {outcome.slide_count} slides")
+        return 0 if outcome.ok else 2
+    if args.command == "benchmark":
+        from .benchmark import run_benchmark, summarize, write_report
+        workspace = args.workspace or args.output.parent / "benchmark-workspace"
+        report = run_benchmark(args.cases, workspace)
+        write_report(report, args.output)
+        print(summarize(report))
+        print(f"wrote {args.output}")
+        return 0 if report.passed else 2
+    if args.command == "mcp":
+        from .mcp.server import serve
+        return serve(workspace=args.workspace, host=args.host)
+    if args.command == "release-manifest":
+        from .release import build_manifest, check_versions, write_manifest
+        errors = check_versions(args.root)
+        for error in errors:
+            print(f"version error: {error}")
+        if errors:
+            return 2
+        manifest = build_manifest(args.root)
+        target = write_manifest(manifest, args.output)
+        print(f"wrote {target} ({manifest['file_count']} files, digest {manifest['digest'][:16]})")
+        return 0
+    if args.command == "release-verify":
+        from .release import read_manifest, verify_manifest
+        report = verify_manifest(args.root, read_manifest(args.manifest))
+        for name in report["missing"]:
+            print(f"missing: {name}")
+        for name in report["changed"]:
+            print(f"changed: {name}")
+        for name in report["extra"]:
+            print(f"unexpected: {name}")
+        print(f"release verification: {'PASS' if report['ok'] else 'FAIL'} ({report['counts']})")
+        return 0 if report["ok"] else 2
     parser.print_help(); return 0
 
 

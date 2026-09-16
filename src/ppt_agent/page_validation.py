@@ -7,6 +7,8 @@ from PIL import Image
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
+from .visual_regression import flatten_pixels
+
 
 @dataclass
 class PageGate:
@@ -29,11 +31,13 @@ class DeckGateReport:
     passed: bool
     slide_count: int
     pages: list[PageGate]
+    mode: str = "rendered"
 
     def to_dict(self) -> dict:
         return {
             "passed": self.passed,
             "slide_count": self.slide_count,
+            "mode": self.mode,
             "pages": [asdict(p) for p in self.pages],
         }
 
@@ -90,6 +94,31 @@ def validate_deck_structure(pptx: Path) -> list[tuple[int, int, int, list[str]]]
     return result
 
 
+def validate_structural_pages(pptx: Path) -> DeckGateReport:
+    """Gate a deck on geometry alone, without rasterisation.
+
+    Hosts without a rasteriser degrade to this gate instead of losing the page
+    gate entirely: bounds, zero-size shapes and empty slides are still caught.
+    """
+    prs = Presentation(str(pptx))
+    structure = validate_deck_structure(pptx)
+    slide_count = len(prs.slides)
+    pages: list[PageGate] = []
+    for index, (shape_count, oob, zero, issues) in enumerate(structure, start=1):
+        slide = prs.slides[index - 1] if index <= slide_count else None
+        role = infer_page_role(index, slide_count, _title_text(slide) if slide else "")
+        text_shapes, image_shapes = _shape_stats(slide) if slide else (0, 0)
+        problems = list(issues)
+        if shape_count == 0:
+            problems.append("slide contains no shapes")
+        pages.append(
+            PageGate(index, shape_count, oob, zero, 0, 0, 0.0, not problems, problems,
+                     role, text_shapes, image_shapes)
+        )
+    passed = bool(pages) and all(page.passed for page in pages)
+    return DeckGateReport(passed, slide_count, pages, mode="structural")
+
+
 def validate_rendered_pages(pptx: Path, rendered_pages: list[Path], blank_threshold: float = 0.995) -> DeckGateReport:
     prs = Presentation(str(pptx))
     structure = validate_deck_structure(pptx)
@@ -102,7 +131,7 @@ def validate_rendered_pages(pptx: Path, rendered_pages: list[Path], blank_thresh
         text_shapes, image_shapes = _shape_stats(slide) if slide else (0, 0)
         with Image.open(path) as im:
             rgb = im.convert("RGB")
-            sample = list(rgb.resize((128, 72)).getdata())
+            sample = flatten_pixels(rgb.resize((128, 72)))
             near_white = sum(1 for value in sample if min(value) >= 250) / len(sample)
             width, height = rgb.size
         if near_white >= blank_threshold:
