@@ -221,21 +221,25 @@ Fact Registry
 
 ```text
 ppt-agent/
-├── core/          # Agent 核心编排与智能能力
-├── ir/            # Universal Presentation IR
-├── engines/       # PPTX / Visual / Office 渲染引擎
-├── intelligence/  # Template DNA / Story / Style 等
-├── qa/             # 内容、几何、视觉、证据 QA
-├── repair/         # 自动修复
-├── adapters/       # 不同 Agent 平台适配器
-├── skills/         # 可移植 Skill
-├── templates/      # 模板与设计规范
-├── examples/       # 示例项目
-├── benchmarks/     # Benchmark 与对比测试
-├── tests/          # 自动化测试
-├── scripts/        # 构建与开发脚本
-├── docs/           # 技术文档
-└── .github/        # GitHub Actions / Issue / PR 配置
+├── src/ppt_agent/     # 核心 Python 包
+│   ├── ir.py              # Universal IR 数据模型
+│   ├── markdown.py        # Markdown → IR
+│   ├── story.py           # Story Architect（叙事大纲 → IR）
+│   ├── template.py        # PPTX → Template DNA
+│   ├── dna_to_ir.py       # Template DNA → IR
+│   ├── renderer.py        # IR → 原生可编辑 PPTX
+│   ├── page_validation.py # 几何 / 空白页 QA
+│   ├── visual_critic.py   # 视觉评审规则
+│   ├── visual_regression.py # 渲染 + SSIM/MAE 对比
+│   ├── fact_registry.py   # 事实登记与溯源校验
+│   ├── delivery.py        # 交付门禁 + 有界修复循环
+│   └── cli.py             # 命令行入口
+├── ir/                # Universal Presentation IR JSON Schema
+├── schemas/           # 交付清单等其他 Schema
+├── skills/            # 可移植 Skill
+├── tests/             # 自动化测试
+├── docs/              # 技术文档
+└── .github/           # GitHub Actions / Issue / PR 配置
 ```
 
 ## 跨 Agent 平台
@@ -416,33 +420,45 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 
 ## 当前状态
 
-当前仓库处于 **V0.1 Foundation** 阶段。
-
-接下来将逐步实现：
+仓库已实现 **V0.1 ~ V0.3 核心闭环**，并补齐 V0.4 Fact Registry 与 V0.5 修复循环骨架：
 
 ```text
-PPTX Analyzer
+PPTX Analyzer            ✅ analyze-pptx
       ↓
-Template DNA
+Template DNA             ✅ template.py（含 OOXML 保真信息）
       ↓
-Content Intelligence
+Story Architect          ✅ story.py
       ↓
-Story Architect
+Universal IR             ✅ ir.py（schema + 数据模型 + 反序列化）
       ↓
-Slide Planner
+Native PPTX Engine       ✅ renderer.py（IR → 可编辑 PPTX）
       ↓
-Universal IR
+Render / QA              ✅ page_validation / visual_regression / visual_critic
       ↓
-Native PPTX Engine
-      ↓
-Render
-      ↓
-Visual Critic
-      ↓
-Repair Agent
+Repair Agent             ✅ delivery.run_repair_loop（有界修复）
       ↓
 Final PPTX
 ```
+
+### 命令行
+
+```bash
+# 参考 PPT → Template DNA → IR
+ppt-agent pptx-to-ir reference.pptx -o ir.json
+
+# Markdown → IR
+ppt-agent markdown-to-ir outline.md -o ir.json
+
+# IR → 原生可编辑 PPTX
+ppt-agent ir-to-pptx ir.json -o deck.pptx
+
+# 逐页质检
+ppt-agent validate-pptx deck.pptx -o qa.json
+```
+
+> 渲染器 v1 支持文本 / 形状 / 图片 / 表格 / 图表（占位）/ 分组，绝对坐标与自动流式排版，填充透明度（OOXML `a:alpha`）；渐变暂降级为纯色。详见 `ROADMAP.md`。
+
+完整路线进度见 [`ROADMAP.md`](ROADMAP.md)，模块职责见 [`docs/architecture.md`](docs/architecture.md)。
 
 ## English
 
