@@ -11,6 +11,14 @@ class Provenance:
     locator: str | None = None
     quote: str | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Provenance":
+        return cls(
+            source_id=str(data.get("source_id", "")),
+            locator=data.get("locator"),
+            quote=data.get("quote"),
+        )
+
 
 @dataclass
 class Component:
@@ -25,6 +33,25 @@ class Component:
     style: dict[str, Any] = field(default_factory=dict)
     provenance: list[Provenance] = field(default_factory=list)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Component":
+        return cls(
+            type=str(data.get("type") or "shape"),
+            id=data.get("id"),
+            x=data.get("x"),
+            y=data.get("y"),
+            w=data.get("w"),
+            h=data.get("h"),
+            text=data.get("text"),
+            data=data.get("data"),
+            style=dict(data.get("style") or {}),
+            provenance=[
+                Provenance.from_dict(item)
+                for item in (data.get("provenance") or [])
+                if isinstance(item, dict)
+            ],
+        )
+
 
 @dataclass
 class Slide:
@@ -35,6 +62,22 @@ class Slide:
     components: list[Component] = field(default_factory=list)
     speaker_notes: str | None = None
     data: Any = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Slide":
+        return cls(
+            id=str(data.get("id") or ""),
+            purpose=str(data.get("purpose") or "content"),
+            claim=data.get("claim"),
+            layout=data.get("layout"),
+            components=[
+                Component.from_dict(item)
+                for item in (data.get("components") or [])
+                if isinstance(item, dict)
+            ],
+            speaker_notes=data.get("speaker_notes"),
+            data=data.get("data"),
+        )
 
 
 @dataclass
@@ -61,6 +104,23 @@ class Presentation:
 
     def to_json(self, *, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Presentation":
+        meta = data.get("metadata") or {}
+        return cls(
+            version=str(data.get("version") or "0.1"),
+            title=str(meta.get("title") or data.get("title") or "Untitled Presentation"),
+            slides=[
+                Slide.from_dict(item)
+                for item in (data.get("slides") or [])
+                if isinstance(item, dict)
+            ],
+            audience=meta.get("audience") or data.get("audience"),
+            objective=meta.get("objective") or data.get("objective"),
+            theme=dict(data.get("theme") or {}),
+            sources=list(data.get("sources") or []),
+        )
 
 
 def validate_presentation(data: dict[str, Any]) -> list[str]:

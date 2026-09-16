@@ -16,7 +16,7 @@ def _walk_shapes(shapes: list[dict[str, Any]], inherited_parent: str | None = No
 
 
 def build_relationship_graph(dna: dict[str, Any]) -> dict[str, Any]:
-    """Build explicit master→layout→slide inheritance and recursive containment."""
+    """Build explicit master->layout->slide inheritance and recursive containment."""
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     node_ids: set[str] = set()
@@ -52,6 +52,7 @@ def build_relationship_graph(dna: dict[str, Any]) -> dict[str, Any]:
             add_edge(layout_id, slide_id, "inherits")
 
         roots: list[tuple[str, int]] = []
+        seen_root_ids: set[str] = set()
         for shape, sid, parent in _walk_shapes(slide.get("shapes") or []):
             add_node({
                 "id": sid,
@@ -62,7 +63,8 @@ def build_relationship_graph(dna: dict[str, Any]) -> dict[str, Any]:
             })
             add_edge(parent or slide_id, sid, "contains")
             z = shape.get("z_index", shape.get("z_order"))
-            if parent is None and isinstance(z, (int, float)):
+            if parent is None and isinstance(z, (int, float)) and sid not in seen_root_ids:
+                seen_root_ids.add(sid)
                 roots.append((sid, int(z)))
 
         roots.sort(key=lambda item: (item[1], item[0]))

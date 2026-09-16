@@ -28,6 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     dna_ir.add_argument("source", type=Path); dna_ir.add_argument("-o", "--output", required=True, type=Path)
     convert = sub.add_parser("pptx-to-ir", help="Analyze a PPTX and convert its Template DNA to Universal IR")
     convert.add_argument("source", type=Path); convert.add_argument("-o", "--output", required=True, type=Path)
+    ir_pptx = sub.add_parser("ir-to-pptx", help="Render Universal IR JSON into an editable PPTX")
+    ir_pptx.add_argument("source", type=Path); ir_pptx.add_argument("-o", "--output", required=True, type=Path)
     render = sub.add_parser("render-pptx", help="Render every PPTX slide to PNG")
     render.add_argument("source", type=Path); render.add_argument("-o", "--output", required=True, type=Path)
     visual = sub.add_parser("visual-regression", help="Render two decks and compare every page")
@@ -71,6 +73,12 @@ def main() -> int:
     if args.command == "pptx-to-ir":
         dna = analyze_pptx(args.source); presentation = template_dna_to_ir(dna, source=args.source.name)
         _write_json(args.output, json.loads(presentation.to_json())); print(f"wrote {args.output} ({len(presentation.slides)} slides)"); return 0
+    if args.command == "ir-to-pptx":
+        from .ir import Presentation
+        from .renderer import render_presentation
+        presentation = Presentation.from_dict(_read_json(args.source))
+        output = render_presentation(presentation, args.output)
+        print(f"wrote {output} ({len(presentation.slides)} slides)"); return 0
     if args.command == "render-pptx":
         from .visual_regression import render_pptx
         pages = render_pptx(args.source, args.output); print(f"rendered {len(pages)} slides to {args.output}"); return 0
