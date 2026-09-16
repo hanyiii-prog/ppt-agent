@@ -249,6 +249,7 @@ class PptAgent:
         audience: str | None = None,
         objective: str | None = None,
         renderer: str | None = None,
+        template: str | Path | None = None,
         reference: str | Path | None = None,
         gate: bool = True,
         emit_html: bool = True,
@@ -266,6 +267,17 @@ class PptAgent:
             presentation = self.plan(
                 markdown, title=title, audience=audience, objective=objective
             )
+        if template is not None:
+            from .theme import theme_from_dna
+
+            dna = self.analyze_template(template)
+            resolved = theme_from_dna(dna, name=f"template:{Path(template).stem}")
+            presentation.theme = resolved.to_dict()
+            warnings.append(
+                f"template theme from {Path(template).name}: "
+                f"primary #{resolved.primary}, accent #{resolved.accent}, font {resolved.font_title}"
+            )
+
         if not presentation.slides:
             warnings.append("presentation IR contains no slides")
 
