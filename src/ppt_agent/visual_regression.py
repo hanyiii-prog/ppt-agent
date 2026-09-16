@@ -68,9 +68,25 @@ def rasteriser_tools() -> tuple[str, ...]:
     return tuple(name for name in (*OFFICE_BINARIES, "pdftoppm") if shutil.which(name))
 
 
+def preview_backend() -> str | None:
+    """Which rasterisation backend can actually run here.
+
+    LibreOffice + pdftoppm is preferred because it is a true Office renderer.
+    When neither is installed the Pillow backend in ``preview`` keeps visual QA
+    alive instead of silently degrading every gate to structural checks.
+    """
+    if office_binary() is not None and shutil.which("pdftoppm") is not None:
+        return "libreoffice"
+    try:
+        from PIL import Image  # noqa: F401
+    except Exception:  # pragma: no cover - depends on the environment
+        return None
+    return "pillow"
+
+
 def rasteriser_available() -> bool:
     """True when a deck can actually be rasterised on this host."""
-    return office_binary() is not None and shutil.which("pdftoppm") is not None
+    return preview_backend() is not None
 
 
 def flatten_pixels(image: "Image.Image") -> list:
@@ -98,21 +114,34 @@ def _prepare_output_dir(output_dir: Path) -> None:
 
 
 def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144) -> list[Path]:
-    """Render a PPTX to one PNG per slide using LibreOffice + pdftoppm."""
-    binary = office_binary()
-    if binary is None:
+    """Render a PPTX to one PNG per slide, named ``slide-NN.png``.
+
+    Uses LibreOffice + pdftoppm when available, otherwise the deterministic
+    Pillow backend so visual gates still run on a bare machine.
+    """
+    backend = preview_backend()
+    if backend is None:
         raise RuntimeError(
-            "no LibreOffice/soffice executable found; rasterisation is unavailable on this host"
+            "no rasteriser available: install LibreOffice (soffice + pdftoppm) "
+            "or Pillow to enable visual gates"
         )
     _prepare_output_dir(output_dir)
-    with tempfile.TemporaryDirectory(prefix="ppt-agent-render-") as tmp:
-        tmp_path = Path(tmp)
-        _run([binary, "--headless", "--convert-to", "pdf", "--outdir", str(tmp_path), str(pptx)])
-        pdf = tmp_path / f"{pptx.stem}.pdf"
-        if not pdf.exists():
-            raise RuntimeError(f"LibreOffice did not produce PDF for {pptx}")
-        _run(["pdftoppm", "-png", "-r", str(dpi), str(pdf), str(output_dir / "slide")])
-    pages = sorted(output_dir.glob("slide-*.png"))
+
+    if backend == "libreoffice":
+        binary = office_binary()
+        with tempfile.TemporaryDirectory(prefix="ppt-agent-render-") as tmp:
+            tmp_path = Path(tmp)
+            _run([binary, "--headless", "--convert-to", "pdf", "--outdir", str(tmp_path), str(pptx)])
+            pdf = tmp_path / f"{pptx.stem}.pdf"
+            if not pdf.exists():
+                raise RuntimeError(f"LibreOffice did not produce PDF for {pptx}")
+            _run(["pdftoppm", "-png", "-r", str(dpi), str(pdf), str(output_dir / "slide")])
+        pages = sorted(output_dir.glob("slide-*.png"))
+    else:
+        from .preview import rasterize_pptx
+
+        pages = sorted(rasterize_pptx(pptx, output_dir, dpi=float(dpi), prefix="slide"))
+
     if not pages:
         raise RuntimeError(f"no rendered pages found for {pptx}")
     return pages

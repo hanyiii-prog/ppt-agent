@@ -168,10 +168,12 @@ def _placeholder_html(box: LayoutBox, label: str) -> str:
 
 def _shape_html(box: LayoutBox) -> str:
     component = box.component
+    style = component.style if isinstance(component.style, dict) else {}
+    radius = "border-radius:50%;" if str(style.get("shape") or "").lower() in ("ellipse", "oval", "circle") else ""
     text = html.escape(text_of(component), quote=True).replace("\n", "<br>")
     inner = f'<span class="shape-text">{text}</span>' if text else ""
     return (
-        f'<div class="comp shape" style="{_position_css(box, fixed_height=True)}'
+        f'<div class="comp shape" style="{_position_css(box, fixed_height=True)}{radius}'
         f'{_surface_css(component)}{_font_css(component, box.font_pt)}">{inner}</div>'
     )
 
@@ -281,6 +283,9 @@ html, body {{ margin: 0; padding: 0; background: #eef0f4; }}
 
 def render_html_deck(presentation: Presentation, output: str | Path) -> tuple[Path, list[str]]:
     """Render Universal IR into a single self-contained, printable HTML deck."""
+    from ..design import design_presentation
+
+    presentation = design_presentation(presentation)
     width_in, height_in = slide_size_inches(presentation)
     width_px = round(width_in * PX_PER_INCH)
     height_px = round(height_in * PX_PER_INCH)

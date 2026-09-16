@@ -97,6 +97,13 @@ def _apply_fill(shape: Any, fill: Any) -> None:
 
 def _apply_line(shape: Any, line: Any) -> None:
     if not isinstance(line, dict) or not line:
+        # python-pptx leaves the default theme outline on new autoshapes; an
+        # unspecified line must mean "no outline", or every decoration gets a
+        # blue hairline border.
+        try:
+            shape.line.fill.background()
+        except Exception:
+            pass
         return
     rgb = _rgb(line.get("rgb"))
     width = line.get("width_pt")
@@ -237,9 +244,12 @@ def _render_component(slide: Any, comp: Component, box: tuple[Any, Any, Any, Any
             return
         _add_placeholder(slide, box, f"[group] {comp.id or ''}".strip())
         return
-    # generic shape / unknown type -> rectangle with fill/line
-    shape = slide.shapes.add_shape(_MSO_SHAPE.RECTANGLE, *box)
+    # generic shape / unknown type -> autoshape with fill/line
     style = comp.style if isinstance(comp.style, dict) else {}
+    preset = _MSO_SHAPE.RECTANGLE
+    if str(style.get("shape") or "").lower() in ("ellipse", "oval", "circle"):
+        preset = _MSO_SHAPE.OVAL
+    shape = slide.shapes.add_shape(preset, *box)
     fill = style.get("fill")
     if isinstance(fill, dict) and fill:
         _apply_fill(shape, fill)
@@ -293,6 +303,9 @@ def render_presentation(presentation: Presentation, output: str | Path, *, itera
     if not _PPTX_AVAILABLE:
         raise RuntimeError("python-pptx is required for rendering; install with pip install 'ppt-agent[pptx]'")
 
+    from .design import design_presentation
+
+    presentation = design_presentation(presentation)
     width_in, height_in = _slide_size(presentation)
     prs = _PptxPresentation()
     prs.slide_width = _Inches(width_in)
