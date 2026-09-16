@@ -47,24 +47,57 @@ def test_render_presentation_creates_expected_slides(tmp_path: Path):
     assert "flows below" in second_text
 
 
-def test_flow_layout_stacks_components_without_geometry(tmp_path: Path):
-    presentation = Presentation.from_dict({
-        "version": "0.1",
-        "metadata": {"title": "Flow"},
-        "slides": [{
-            "id": "s1",
-            "purpose": "content",
-            "components": [
-                {"type": "paragraph", "text": "line one"},
-                {"type": "paragraph", "text": "line two"},
-            ],
-        }],
-    })
-    output = render_presentation(presentation, tmp_path / "flow.pptx")
+def test_flow_layout_stacks_components_without_geometry():
+    """`resolve_layout` stays the shared fallback for geometry-less components.
+
+    The production render path now composes slides through the design layer, so
+    this contract is asserted against the layout engine directly rather than
+    through a rendered file.
+    """
+    from ppt_agent.ir import Component, Slide
+    from ppt_agent.styling import resolve_layout
+
+    slide = Slide(
+        id="s1",
+        purpose="content",
+        components=[
+            Component(type="paragraph", text="line one"),
+            Component(type="paragraph", text="line two"),
+        ],
+    )
+    boxes = resolve_layout(slide, 13.333, 7.5)
+    assert len(boxes) == 2
+    assert boxes[0].y < boxes[1].y
+    assert not boxes[0].absolute and not boxes[1].absolute
+
+
+def test_render_presentation_composes_a_designed_deck(tmp_path: Path):
+    """A semantic slide must come out designed, not as a bare text box."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    presentation = Presentation.from_dict(_ir_dict())
+    output = render_presentation(presentation, tmp_path / "designed.pptx")
     prs = PptxPresentation(str(output))
-    tops = sorted(shape.top for shape in prs.slides[0].shapes if shape.has_text_frame)
-    assert len(tops) == 2
-    assert tops[0] < tops[1]
+
+    cover = list(prs.slides[0].shapes)
+    # spine + spine accent + base band + rule + title
+    assert len(cover) >= 5
+    assert any(shape.has_text_frame and "Cover Title" in shape.text_frame.text for shape in cover)
+    # the deck carries real decoration: autoshapes, not just text boxes
+    assert any(shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE for shape in cover)
+
+
+def test_template_injected_slides_are_left_untouched(tmp_path: Path):
+    """Slides with explicit geometry were designed elsewhere; keep them verbatim."""
+    presentation = Presentation.from_dict(_ir_dict())
+    output = render_presentation(presentation, tmp_path / "template.pptx")
+    prs = PptxPresentation(str(output))
+
+    texts = " ".join(
+        shape.text_frame.text for shape in prs.slides[1].shapes if shape.has_text_frame
+    )
+    assert "Absolute box" in texts
+    assert "flows below" in texts
 
 
 def test_render_without_pptx_raises(monkeypatch, tmp_path: Path):

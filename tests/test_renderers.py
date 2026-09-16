@@ -112,11 +112,11 @@ def test_preference_can_be_reordered_and_reset():
     assert preference() == DEFAULT_PREFERENCE
 
 
-def test_render_request_and_result_are_serialisable():
+def test_render_request_and_result_are_serialisable(tmp_path: Path):
     request = RenderRequest(output=Path("deck.pptx"), iteration=2, repair_requests=({"page": 1},))
     assert request.output == Path("deck.pptx")
     result = HtmlRenderer().render(
-        Presentation.from_dict(FIXTURE), RenderRequest(output=Path("deck.html"))
+        Presentation.from_dict(FIXTURE), RenderRequest(output=tmp_path / "deck.html")
     )
     payload = result.to_dict()
     assert payload["renderer"] == "html" and payload["slide_count"] == 3

@@ -17,6 +17,8 @@ from ppt_agent.release import (
 
 
 def _tree(root: Path) -> Path:
+    from ppt_agent import __version__ as package_version
+
     (root / "src" / "pkg").mkdir(parents=True)
     (root / "src" / "pkg" / "core.py").write_text("VALUE = 1\n", encoding="utf-8")
     (root / "tests").mkdir(parents=True)
@@ -24,7 +26,9 @@ def _tree(root: Path) -> Path:
     (root / "docs").mkdir(parents=True)
     (root / "docs" / "guide.md").write_text("# Guide\n", encoding="utf-8")
     (root / "README.md").write_text("# Readme\n", encoding="utf-8")
-    (root / "pyproject.toml").write_text('[project]\nversion = "1.0.0"\n', encoding="utf-8")
+    # The fixture must agree with the installed package, otherwise a version bump
+    # would fail every release test for the wrong reason.
+    (root / "pyproject.toml").write_text(f'[project]\nversion = "{package_version}"\n', encoding="utf-8")
     # Noise that must never enter the manifest.
     (root / "src" / "pkg" / "__pycache__").mkdir(parents=True)
     (root / "src" / "pkg" / "__pycache__" / "core.cpython-313.pyc").write_bytes(b"\x00")

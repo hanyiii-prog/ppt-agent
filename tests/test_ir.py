@@ -46,9 +46,12 @@ def test_package_version(repo_root: Path):
 
     import ppt_agent
 
-    assert ppt_agent.__version__ == "1.0.0"
     pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
-    assert re.search(r'^version\s*=\s*"1\.0\.0"', pyproject, re.MULTILINE)
+    match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
+    assert match is not None, "pyproject.toml must declare a [project] version"
+    # Assert consistency rather than a literal, so bumping the version is a
+    # one-line change instead of a test edit.
+    assert ppt_agent.__version__ == match.group(1)
 
 
 def test_importing_the_core_does_not_require_presentation_engines():
