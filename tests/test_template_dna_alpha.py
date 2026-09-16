@@ -34,6 +34,8 @@ def test_fill_alpha_and_transparency_are_consistent():
         class _Fill(FakeShape._Fill):
             transparency = 0.2
 
+        fill = _Fill()
+
     info = _fill_info(Shape())
     assert info["alpha"] == 80000
     assert info["opacity"] == 0.8
