@@ -214,6 +214,7 @@ def tool_build(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any
         audience=_optional_string(arguments, "audience"),
         objective=_optional_string(arguments, "objective"),
         renderer=_optional_string(arguments, "renderer"),
+        template=context.input_path(_string(arguments, "template")) if _optional_string(arguments, "template") else None,
         reference=context.input_path(_string(arguments, "reference")) if _optional_string(arguments, "reference") else None,
         gate=bool(arguments.get("gate", True)),
         emit_html=bool(arguments.get("emit_html", True)),
@@ -385,6 +386,10 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "out_dir": {"type": "string", "description": "Output directory inside the workspace"},
                 "stem": {"type": "string", "description": "Base filename for the artifacts"},
                 "renderer": {"type": "string"},
+                "template": {
+                    "type": "string",
+                    "description": "Reference PPTX whose colours, fonts and type scale seed the design theme",
+                },
                 "reference": {"type": "string"},
                 "gate": {"type": "boolean", "description": "Run the delivery gate (default true)"},
                 "emit_html": {"type": "boolean", "description": "Also emit the HTML preview (default true)"},
