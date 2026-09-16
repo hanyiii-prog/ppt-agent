@@ -113,7 +113,7 @@ def test_preference_can_be_reordered_and_reset():
 
 
 def test_render_request_and_result_are_serialisable():
-    request = RenderRequest(output=Path("deck.pptx"), iteration=2, repair_requests=(("page", 1),))
+    request = RenderRequest(output=Path("deck.pptx"), iteration=2, repair_requests=({"page": 1},))
     assert request.output == Path("deck.pptx")
     result = HtmlRenderer().render(
         Presentation.from_dict(FIXTURE), RenderRequest(output=Path("deck.html"))
