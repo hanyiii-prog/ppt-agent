@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--stem", default="presentation", help="Base filename for the artifacts")
     build.add_argument("--title"); build.add_argument("--audience"); build.add_argument("--objective")
     build.add_argument("--renderer", help="Renderer name: native-pptx (default) or html")
+    build.add_argument("--template", type=Path, help="Reference .pptx whose colours and fonts seed the design theme")
     build.add_argument("--reference", type=Path, help="Reference deck for visual regression")
     build.add_argument("--no-gate", action="store_true", help="Skip the delivery gate")
     build.add_argument("--no-html", action="store_true", help="Skip the HTML preview")
@@ -219,7 +220,7 @@ def main() -> int:
             markdown=None if args.ir else args.source.read_text(encoding="utf-8"),
             presentation=agent.load_ir(args.ir) if args.ir else None,
             title=args.title, audience=args.audience, objective=args.objective,
-            renderer=args.renderer, reference=args.reference,
+            renderer=args.renderer, template=args.template, reference=args.reference,
             gate=not args.no_gate, emit_html=not args.no_html,
             facts=facts, stem=args.stem,
         )
