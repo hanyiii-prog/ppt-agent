@@ -21,12 +21,14 @@ from .contracts import (
     negotiate,
 )
 
-__version__ = "1.2.0"
+__version__ = "1.9.0"
 
 __all__ = [
     "ADAPTER_PROTOCOL_VERSION",
     "CORE_API_VERSION",
     "CapabilitySet",
+    "CloneShell",
+    "dominant_colors",
     "ContractError",
     "IR_SCHEMA_VERSION",
     "PptAgent",
@@ -44,6 +46,14 @@ def __getattr__(name: str) -> Any:
         from .sdk import PptAgent
 
         return PptAgent
+    if name == "dominant_colors":
+        from .palette import dominant_colors
+
+        return dominant_colors
+    if name == "CloneShell":
+        from .clone_shell import CloneShell
+
+        return CloneShell
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
