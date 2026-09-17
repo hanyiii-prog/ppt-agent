@@ -53,6 +53,10 @@ class CloneBuildError(ValueError):
     or a template with too few shells)."""
 
 
+class ChromeFidelityError(ValueError):
+    """A finished deck no longer carries the template's native chrome."""
+
+
 #: roles -> the shell buckets that can serve them, most specific first. A TOC
 #: is authored on the *content* shell (it carries the chrome) and a closing
 #: page reuses the *cover* shell -- both are template conventions, not hacks.
@@ -134,6 +138,138 @@ def audit_deck(pptx: str | Path) -> dict[str, Any]:
 
     issues = audit_pages(Presentation(str(pptx)))
     return {"pptx": str(pptx), "count": len(issues), "issues": issues}
+
+
+# --------------------------------------------------------------------------- #
+# Fidelity Gate for the clone route
+# --------------------------------------------------------------------------- #
+def _shell_layer_map(template: str | Path) -> dict[str, dict[str, Any]]:
+    """Template layout/master layer inventories, keyed by part basename."""
+    from .fidelity import extract_fidelity_dna
+
+    maps: dict[str, dict[str, Any]] = {"layouts": {}, "masters": {}}
+    first = extract_fidelity_dna(template, slide_index=1)
+    count = first["presentation"]["slide_count"]
+    for index in range(1, count + 1):
+        dna = extract_fidelity_dna(template, slide_index=index)
+        for kind, key in (("layout", "layouts"), ("master", "masters")):
+            part = dna[kind].get("path")
+            if not part:
+                continue
+            base = Path(part).name
+            maps[key].setdefault(base, dna[kind].get("shapes", []))
+    return maps
+
+
+def chrome_fidelity_gate(
+    template: str | Path,
+    built: str | Path,
+    *,
+    expected_kinds: dict[int, str] | None = None,
+    tolerance: float = 0.0005,
+) -> dict[str, Any]:
+    """Structural fidelity gate for the clone route.
+
+    Verifies, per finished page:
+
+    1. the page's **inherited layers** (its layout + master shapes) are
+       structurally identical to the template's layers of the same parts --
+       native chrome must be inherited, never redrawn or clobbered;
+    2. the extracted ``page_kind`` matches ``expected_kinds`` where the caller
+       anchors an expectation (the clone route keeps the *template's* page
+       order, so only the caller knows which role landed on which page);
+    3. TOC pages still carry a valid TOC structure fingerprint.
+
+    The gate compares only inherited layers: the slide-local content of a
+    clone is *supposed* to differ from the template shell it came from.
+    Page-derived values (``stack`` / ``global_render_order`` of inherited
+    shapes) are stripped before the comparison -- they legitimately vary with
+    the slide content stacked above the chrome and are not chrome defects.
+    """
+    from .fidelity import extract_fidelity_dna
+    from .fidelity_diff import compare_dna
+
+    def _strip_derived(shapes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        cleaned = []
+        for shape in shapes:
+            copy = {k: v for k, v in shape.items() if k not in ("stack", "global_render_order")}
+            if isinstance(copy.get("children"), list):
+                copy["children"] = _strip_derived(copy["children"])
+            cleaned.append(copy)
+        return cleaned
+
+    template_map = _shell_layer_map(template)
+    first = extract_fidelity_dna(built, slide_index=1)
+    count = first["presentation"]["slide_count"]
+
+    pages: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    for index in range(1, count + 1):
+        dna = extract_fidelity_dna(built, slide_index=index)
+        page: dict[str, Any] = {"slide_index": index, "page_kind": dna.get("page_kind"), "passed": True, "issues": []}
+
+        expected_kind = (expected_kinds or {}).get(index)
+        if expected_kind and dna.get("page_kind") != expected_kind:
+            page["issues"].append({
+                "path": f"pages[{index}].page_kind",
+                "code": "page.page_kind",
+                "reference": expected_kind,
+                "candidate": dna.get("page_kind"),
+                "message": "page kind diverged from the expected kind for this page",
+            })
+
+        for kind, key in (("layout", "layouts"), ("master", "masters")):
+            part = dna[kind].get("path")
+            base = Path(part).name if part else ""
+            reference_shapes = template_map[key].get(base)
+            if reference_shapes is None:
+                page["issues"].append({
+                    "path": f"pages[{index}].{kind}",
+                    "code": "inheritance.chrome_missing",
+                    "reference": None,
+                    "candidate": base,
+                    "message": f"built page uses {kind} {base!r} which the template never used",
+                })
+                continue
+            report = compare_dna(
+                {"slide": {"shapes": _strip_derived(reference_shapes)}},
+                {"slide": {"shapes": _strip_derived(dna[kind].get("shapes", []))}},
+                tolerance=tolerance,
+            )
+            for issue in report.issues:
+                page["issues"].append({
+                    "path": f"pages[{index}].{kind}.{issue.path}",
+                    "code": issue.code or issue.category,
+                    "reference": issue.reference,
+                    "candidate": issue.candidate,
+                    "message": issue.message,
+                })
+
+        if dna.get("page_kind") == "toc":
+            toc = dna.get("toc") or {}
+            if not toc or not toc.get("structure_fingerprint"):
+                page["issues"].append({
+                    "path": f"pages[{index}].toc",
+                    "code": "structure.toc_fingerprint",
+                    "reference": "toc structure",
+                    "candidate": None,
+                    "message": "TOC page lost its structural fingerprint",
+                })
+
+        page["passed"] = not page["issues"]
+        if not page["passed"]:
+            issues.extend(page["issues"])
+        pages.append(page)
+
+    return {
+        "schema": "template-dna/chrome-fidelity-gate/v1",
+        "passed": not issues,
+        "template": str(template),
+        "built": str(built),
+        "pages": pages,
+        "issues": issues,
+        "issue_count": len(issues),
+    }
 
 
 def _demand(pages: list[dict[str, Any]]) -> dict[str, int]:
@@ -287,12 +423,21 @@ def render_clone_deck(
     output: str | Path,
     *,
     audit: bool = True,
+    fidelity: bool = True,
+    render: bool = False,
 ) -> dict[str, Any]:
     """Render a page plan through the clone route and (by default) audit it.
 
     ``pages`` is a list of specs (see the module docstring). The output deck
     keeps one template shell per spec, in plan order, with every untouched
     decoration byte-identical to the template.
+
+    With ``fidelity=True`` (default) the finished deck runs through the
+    chrome fidelity gate: inherited layout/master layers must still match the
+    template, every page kind must match its planned role, and TOC pages must
+    keep their structural fingerprint. With ``render=True`` a visual status
+    (``visual_pass`` / ``visual_fail`` / ``renderer_unavailable`` /
+    ``renderer_error``) is appended when the structural gate passed.
     """
     if not isinstance(pages, list) or not pages:
         raise CloneBuildError("'pages' must be a non-empty array of page specs")
@@ -301,12 +446,22 @@ def render_clone_deck(
 
     deck = CloneShell(str(template))
     warnings: list[str] = []
+    # page kinds the classifier can verify *independently of page position*:
+    # toc (headline text) and section (rotated band / layout tokens). cover and
+    # closing are positional judgements, so a cover-shell closing page that the
+    # template placed mid-deck must not be flagged.
+    verifiable = ("toc", "section")
+    expected_kinds: dict[int, str] = {}
     try:
         _check_capacity(deck, pages)
         for index, spec in enumerate(pages, 1):
             role = _role_of(spec)
             cleared = role not in ("cover", "closing")
-            _, slide = _take(deck, role, cleared=cleared)
+            shell_index, slide = _take(deck, role, cleared=cleared)
+            # the clone route keeps the TEMPLATE's page order: the shell that
+            # served this spec lands at output page shell_index + 1
+            if role in verifiable:
+                expected_kinds[shell_index + 1] = role
             if role == "cover":
                 warnings.extend(_render_cover(slide, spec, deck.prs))
             elif role == "closing":
@@ -329,10 +484,21 @@ def render_clone_deck(
     }
     if audit:
         result["audit"] = audit_deck(output)
+
+    roles = [_role_of(spec) for spec in pages]
+    if fidelity:
+        gate = chrome_fidelity_gate(template, output, expected_kinds=expected_kinds or None)
+        gate["planned_roles"] = roles
+        result["fidelity"] = gate
+        if gate["passed"] and render:
+            from .visual_regression import visual_status
+
+            result["fidelity"]["visual"] = visual_status(template, output, Path(str(output)).parent / "fidelity-visual")
     return result
 
 
 __all__ = [
+    "ChromeFidelityError",
     "CloneBuildError",
     "KITS",
     "KIT_POSITIONAL",
@@ -340,6 +506,7 @@ __all__ = [
     "ROLES",
     "ROLE_BUCKETS",
     "audit_deck",
+    "chrome_fidelity_gate",
     "plan_template",
     "render_clone_deck",
 ]
