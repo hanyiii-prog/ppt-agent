@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import tempfile
@@ -20,6 +19,9 @@ class PageMetrics:
     ssim: float
     passed: bool
     diff_image: str | None = None
+    candidate_width: int | None = None
+    candidate_height: int | None = None
+    dimension_match: bool = True
 
 
 @dataclass
@@ -165,7 +167,8 @@ def compare_images(reference: Path, candidate: Path, *, threshold_ssim: float = 
 
     with Image.open(reference) as ref_im, Image.open(candidate) as cand_im:
         ref = ref_im.convert("RGB"); cand = cand_im.convert("RGB")
-        if ref.size != cand.size:
+        dimensions_match = ref.size == cand.size
+        if not dimensions_match:
             cand = cand.resize(ref.size, Image.Resampling.LANCZOS)
         diff = ImageChops.difference(ref, cand)
         mae = sum(ImageStat.Stat(diff).mean) / (3 * 255)
@@ -173,7 +176,7 @@ def compare_images(reference: Path, candidate: Path, *, threshold_ssim: float = 
     gray_ref = _to_gray_array(reference)
     gray_cand = _to_gray_array(candidate, (gray_ref.shape[1], gray_ref.shape[0]))
     ssim = _block_ssim(gray_ref, gray_cand)
-    passed = ssim >= threshold_ssim and mae <= threshold_mae and mismatch <= threshold_mismatch
+    passed = dimensions_match and ssim >= threshold_ssim and mae <= threshold_mae and mismatch <= threshold_mismatch
     if diff_output:
         diff_output.parent.mkdir(parents=True, exist_ok=True)
         diff.point(lambda p: min(255, p * 4)).save(diff_output)
@@ -189,10 +192,14 @@ def visual_regression(reference_dir: Path, candidate_dir: Path, *, threshold_ssi
         diff_path = diff_dir / f"slide-{i}.png" if diff_dir else None
         mae, mismatch, ssim, passed = compare_images(ref, cand, threshold_ssim=threshold_ssim,
             threshold_mae=threshold_mae, threshold_mismatch=threshold_mismatch, diff_output=diff_path)
-        with __import__("PIL").Image.open(ref) as im:
-            width, height = im.size
+        from PIL import Image
+        with Image.open(ref) as ref_im, Image.open(cand) as cand_im:
+            width, height = ref_im.size
+            candidate_width, candidate_height = cand_im.size
+        dimension_match = (width, height) == (candidate_width, candidate_height)
         pages.append(PageMetrics(i, str(ref), str(cand), width, height, mae, mismatch, ssim, passed,
-                                 str(diff_path) if diff_path else None))
+                                 str(diff_path) if diff_path else None, candidate_width, candidate_height,
+                                 dimension_match))
     passed = len(refs) == len(cands) and all(page.passed for page in pages)
     return VisualReport(passed, len(refs), len(cands), threshold_ssim, threshold_mae, threshold_mismatch, pages)
 
