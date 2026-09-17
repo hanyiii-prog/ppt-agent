@@ -14,6 +14,15 @@ from ppt_agent.fidelity_gate import compare_decks
 from fidelity_fixtures import build_rich_pptx, mutate_pptx
 
 
+def _mutate_multi(tmp_path: Path, mutations: list[str]) -> Path:
+    """Chain several single-property mutations onto one candidate deck."""
+    reference = build_rich_pptx(tmp_path / "ref.pptx")
+    candidate = reference
+    for index, mutation in enumerate(mutations):
+        candidate = mutate_pptx(candidate, tmp_path / f"cand-{index}.pptx", mutation)
+    return reference, candidate
+
+
 def test_repair_loop_closes_structural_failures(tmp_path: Path):
     reference = build_rich_pptx(tmp_path / "ref.pptx")
     candidate = mutate_pptx(reference, tmp_path / "cand.pptx", "rotation_changed")
