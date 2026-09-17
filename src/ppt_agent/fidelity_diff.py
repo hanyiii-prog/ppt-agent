@@ -68,7 +68,7 @@ def _category(path: str) -> str:
     if "page_kind" in p or ".kind" in p: return "page_kind"
     if any(x in p for x in ("render_order", "z_order", "z_index", ".layers")): return "layer_order"
     if any(x in p for x in ("geometry", "bbox", "left", "top", "width", "height", "rotation", "flip_")): return "geometry"
-    if any(x in p for x in ("fill", "line", "opacity", "alpha", "transparency", "effects", "gradient")): return "style"
+    if any(x in p for x in ("style", "fill", "line", "opacity", "alpha", "transparency", "effects", "gradient")): return "style"
     if any(x in p for x in ("text", "font", "typeface", "body", "autofit", "insets")): return "text"
     if any(x in p for x in ("picture", "media", "r_embed", "r_link", "crop", "source_rect", "sha256")): return "media"
     if any(x in p for x in ("table", "cell", "row_", "col_")): return "table"
