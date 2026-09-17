@@ -7,9 +7,6 @@ import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageStat
-import numpy as np
-
 
 @dataclass
 class PageMetrics:
@@ -49,8 +46,6 @@ def _run(cmd: list[str]) -> None:
         raise RuntimeError(f"command failed: {' '.join(cmd)}\n{detail}") from exc
 
 
-# LibreOffice ships as `libreoffice` on Debian/Ubuntu and `soffice` on Windows
-# and most RPM distributions. Probe both instead of assuming one.
 OFFICE_BINARIES: tuple[str, ...] = ("libreoffice", "soffice")
 
 
@@ -69,16 +64,11 @@ def rasteriser_tools() -> tuple[str, ...]:
 
 
 def preview_backend() -> str | None:
-    """Which rasterisation backend can actually run here.
-
-    LibreOffice + pdftoppm is preferred because it is a true Office renderer.
-    When neither is installed the Pillow backend in ``preview`` keeps visual QA
-    alive instead of silently degrading every gate to structural checks.
-    """
+    """Which rasterisation backend can actually run here."""
     if office_binary() is not None and shutil.which("pdftoppm") is not None:
         return "libreoffice"
     try:
-        from PIL import Image  # noqa: F401
+        import PIL.Image  # noqa: F401
     except Exception:  # pragma: no cover - depends on the environment
         return None
     return "pillow"
@@ -90,11 +80,7 @@ def rasteriser_available() -> bool:
 
 
 def flatten_pixels(image: "Image.Image") -> list:
-    """Read every pixel as a flat sequence.
-
-    `Image.getdata()` is deprecated and disappears in Pillow 14, so prefer the
-    replacement when the installed Pillow provides it.
-    """
+    """Read every pixel as a flat sequence."""
     getter = getattr(image, "get_flattened_data", None)
     if callable(getter):
         return list(getter())
@@ -102,7 +88,6 @@ def flatten_pixels(image: "Image.Image") -> list:
 
 
 def _prepare_output_dir(output_dir: Path) -> None:
-    """Remove stale renders so a previous larger deck cannot affect page counts."""
     if output_dir.exists():
         for child in output_dir.iterdir():
             if child.is_dir():
@@ -114,11 +99,7 @@ def _prepare_output_dir(output_dir: Path) -> None:
 
 
 def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144) -> list[Path]:
-    """Render a PPTX to one PNG per slide, named ``slide-NN.png``.
-
-    Uses LibreOffice + pdftoppm when available, otherwise the deterministic
-    Pillow backend so visual gates still run on a bare machine.
-    """
+    """Render a PPTX to one PNG per slide."""
     backend = preview_backend()
     if backend is None:
         raise RuntimeError(
@@ -147,7 +128,10 @@ def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144) -> list[Path]:
     return pages
 
 
-def _to_gray_array(path: Path, size: tuple[int, int] | None = None) -> np.ndarray:
+def _to_gray_array(path: Path, size: tuple[int, int] | None = None):
+    import numpy as np
+    from PIL import Image
+
     with Image.open(path) as im:
         image = im.convert("L")
         if size and image.size != size:
@@ -155,7 +139,9 @@ def _to_gray_array(path: Path, size: tuple[int, int] | None = None) -> np.ndarra
         return np.asarray(image, dtype=np.float32) / 255.0
 
 
-def _block_ssim(a: np.ndarray, b: np.ndarray, block: int = 8) -> float:
+def _block_ssim(a, b, block: int = 8) -> float:
+    import numpy as np
+
     h = min(a.shape[0], b.shape[0]); w = min(a.shape[1], b.shape[1])
     h -= h % block; w -= w % block
     if h == 0 or w == 0:
@@ -174,6 +160,9 @@ def _block_ssim(a: np.ndarray, b: np.ndarray, block: int = 8) -> float:
 def compare_images(reference: Path, candidate: Path, *, threshold_ssim: float = 0.995,
                    threshold_mae: float = 0.005, threshold_mismatch: float = 0.01,
                    diff_output: Path | None = None) -> tuple[float, float, float, bool]:
+    from PIL import Image, ImageChops, ImageStat
+    import numpy as np
+
     with Image.open(reference) as ref_im, Image.open(candidate) as cand_im:
         ref = ref_im.convert("RGB"); cand = cand_im.convert("RGB")
         if ref.size != cand.size:
@@ -200,7 +189,7 @@ def visual_regression(reference_dir: Path, candidate_dir: Path, *, threshold_ssi
         diff_path = diff_dir / f"slide-{i}.png" if diff_dir else None
         mae, mismatch, ssim, passed = compare_images(ref, cand, threshold_ssim=threshold_ssim,
             threshold_mae=threshold_mae, threshold_mismatch=threshold_mismatch, diff_output=diff_path)
-        with Image.open(ref) as im:
+        with __import__("PIL").Image.open(ref) as im:
             width, height = im.size
         pages.append(PageMetrics(i, str(ref), str(cand), width, height, mae, mismatch, ssim, passed,
                                  str(diff_path) if diff_path else None))
