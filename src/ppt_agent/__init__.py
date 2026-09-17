@@ -21,6 +21,7 @@ from .contracts import (
     negotiate,
 )
 from .fidelity_diff import FidelityIssue, FidelityReport, assert_fidelity, compare_dna
+from .fidelity_gate import assert_deck_fidelity, compare_decks
 
 __version__ = "1.11.0"
 
@@ -38,7 +39,9 @@ __all__ = [
     "RENDERER_SDK_VERSION",
     "SUPPORTED_IR_VERSIONS",
     "__version__",
+    "assert_deck_fidelity",
     "assert_fidelity",
+    "compare_decks",
     "compare_dna",
     "contract_descriptor",
     "negotiate",
