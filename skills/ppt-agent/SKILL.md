@@ -128,6 +128,11 @@ Verified on the 专病数据库 deck: cover colour-signature distance vs templat
 
 When neither route is clearly better, ask: is the template's *look* the deliverable (clone) or just its *brand colors* (DNA)? Default to clone when a template file is in hand.
 
+On hosts that can only speak MCP, the same clone route is exposed by the `ppt-agent` server as
+`ppt_agent_clone_plan` → `ppt_agent_clone_build` (a JSON page plan; kit kwargs are the
+`page_kits` signatures verbatim) → `ppt_agent_clone_audit` — see `docs/mcp.md`. Prefer the
+Python route below when the host can run code: it reaches everything.
+
 ### Content-page chrome: INHERIT, do not redraw (corrected in v1.7.0)
 
 The single most expensive mistake of the V6→V9 series was re-drawing chrome that the template **layout already paints**. On the clone route the shell's layout supplies the top wash, the two dots, the hairline and both logos; painting them again onto the slide does not "add" chrome:
