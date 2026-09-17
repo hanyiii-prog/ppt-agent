@@ -528,3 +528,4 @@ def test_audit_flags_stale_placeholder_that_would_paint_the_prompt(mini_template
     drop_empty_placeholders(page3)
     assert not any(i["page"] == 3 and i["kind"] == "stale_placeholder"
                    for i in audit_pages(prs))
+
