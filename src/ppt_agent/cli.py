@@ -91,6 +91,37 @@ def build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("release-verify", help="Verify the working tree against a release manifest")
     verify.add_argument("--root", type=Path, default=Path.cwd())
     verify.add_argument("--manifest", type=Path, default=Path("dist/release-manifest.json"))
+
+    # --- V1.11 fidelity engine --------------------------------------------
+    fidelity = sub.add_parser("fidelity", help="OOXML fidelity engine (extract/diff/audit/repair/validate)")
+    fidelity_sub = fidelity.add_subparsers(dest="fidelity_command", required=True)
+    f_extract = fidelity_sub.add_parser("extract", help="Extract the hardened fidelity DNA of one slide")
+    f_extract.add_argument("source", type=Path)
+    f_extract.add_argument("--slide", type=int, default=1)
+    f_extract.add_argument("-o", "--output", required=True, type=Path)
+    f_diff = fidelity_sub.add_parser("diff", help="Structurally compare one slide of two decks")
+    f_diff.add_argument("reference", type=Path); f_diff.add_argument("candidate", type=Path)
+    f_diff.add_argument("--slide", type=int, default=1)
+    f_diff.add_argument("--tolerance", type=float, default=0.0005)
+    f_diff.add_argument("-o", "--output", type=Path)
+    f_audit = fidelity_sub.add_parser("audit", help="Deck-level structural fidelity gate")
+    f_audit.add_argument("reference", type=Path); f_audit.add_argument("candidate", type=Path)
+    f_audit.add_argument("--tolerance", type=float, default=0.0005)
+    f_audit.add_argument("-o", "--output", type=Path)
+    f_repair = fidelity_sub.add_parser("repair", help="Iteratively repair a candidate deck against a reference")
+    f_repair.add_argument("reference", type=Path); f_repair.add_argument("candidate", type=Path)
+    f_repair.add_argument("-o", "--output", required=True, type=Path)
+    f_repair.add_argument("--max-iterations", type=int, default=3)
+    f_repair.add_argument("--workspace", type=Path)
+    f_repair.add_argument("--render", action="store_true", help="Also run the visual gate once the structure matches")
+    f_validate = fidelity_sub.add_parser("validate", help="Structural + rendered fidelity validation")
+    f_validate.add_argument("reference", type=Path); f_validate.add_argument("candidate", type=Path)
+    f_validate.add_argument("--workspace", type=Path)
+    f_validate.add_argument("-o", "--output", type=Path)
+    f_validate.add_argument("--no-render", action="store_true", help="Skip the rendered comparison")
+    f_validate.add_argument("--ssim", type=float, default=0.995)
+    f_validate.add_argument("--mae", type=float, default=0.005)
+    f_validate.add_argument("--mismatch", type=float, default=0.01)
     return parser
 
 
@@ -281,6 +312,86 @@ def main() -> int:
             print(f"unexpected: {name}")
         print(f"release verification: {'PASS' if report['ok'] else 'FAIL'} ({report['counts']})")
         return 0 if report["ok"] else 2
+    if args.command == "fidelity":
+        from .fidelity import extract_fidelity_dna
+        from .fidelity_diff import compare_dna
+        from .fidelity_gate import compare_decks
+
+        if args.fidelity_command == "extract":
+            dna = extract_fidelity_dna(args.source, slide_index=args.slide)
+            _write_json(args.output, dna)
+            print(f"wrote {args.output} (slide {args.slide}, kind={dna['page_kind']}, "
+                  f"layers={len(dna['slide']['shapes'])})")
+            return 0
+        if args.fidelity_command == "diff":
+            report = compare_dna(
+                extract_fidelity_dna(args.reference, slide_index=args.slide),
+                extract_fidelity_dna(args.candidate, slide_index=args.slide),
+                tolerance=args.tolerance,
+            )
+            payload = report.to_dict()
+            payload["reference"] = str(args.reference)
+            payload["candidate"] = str(args.candidate)
+            payload["slide_index"] = args.slide
+            if args.output:
+                _write_json(args.output, payload)
+            print(f"slide {args.slide}: {'PASS' if report.passed else 'FAIL'} "
+                  f"(score={report.score}, issues={report.issue_count})")
+            for issue in report.issues[:10]:
+                print(f"  {issue.code or issue.category}: {issue.path}")
+            return 0 if report.passed else 2
+        if args.fidelity_command == "audit":
+            gate = compare_decks(args.reference, args.candidate, tolerance=args.tolerance)
+            if args.output:
+                _write_json(args.output, gate)
+            for page in gate["pages"]:
+                status = "PASS" if page["passed"] else f"FAIL ({page['issue_count']})"
+                print(f"slide {page['slide_index']}: {status}")
+            print(f"deck fidelity gate: {'PASS' if gate['passed'] else 'FAIL'}")
+            return 0 if gate["passed"] else 2
+        if args.fidelity_command == "repair":
+            from .fidelity_pipeline import FidelityRepairExhausted, repair_deck
+            workspace = args.workspace or args.output.parent / "fidelity-repair"
+            try:
+                result = repair_deck(
+                    args.reference, args.candidate, workspace,
+                    max_iterations=args.max_iterations, render=args.render,
+                )
+            except FidelityRepairExhausted as exc:
+                result = exc.payload
+            _write_json(args.output, result)
+            print(f"iterations: {result['iterations']}")
+            print(f"structural: {'PASS' if (result['structural'] or {}).get('passed') else 'FAIL'}")
+            if result.get("visual"):
+                print(f"visual: {result['visual'].get('status')}")
+            for remaining in result.get("remaining_issues", [])[:10]:
+                print(f"remaining: {remaining.get('path', remaining)}")
+            print(f"repair loop: {'PASS' if result['passed'] else 'FAIL'} -> {result['candidate_final']}")
+            return 0 if result["passed"] else 2
+        if args.fidelity_command == "validate":
+            from .fidelity_pipeline import validate_deck_fidelity
+            workspace = args.workspace or (args.output.parent if args.output else Path.cwd()) / "fidelity-validate"
+            result = validate_deck_fidelity(
+                args.reference, args.candidate, workspace,
+                render=not args.no_render,
+                threshold_ssim=args.ssim, threshold_mae=args.mae, threshold_mismatch=args.mismatch,
+            )
+            if args.output:
+                _write_json(args.output, result)
+            structural = result["structural"]
+            print("Fidelity Validation")
+            print("-------------------")
+            print(f"Structural: {'PASS' if structural['passed'] else 'FAIL'}")
+            visual = result["visual"]
+            print(f"Visual:     {'SKIP' if visual.get('status') == 'skipped' else visual.get('status', '').upper()}")
+            print(f"Slides: {structural['presentation']['reference_slide_count']}")
+            if not structural["passed"]:
+                for page in structural["pages"]:
+                    for issue in page.get("issues", [])[:3]:
+                        print(f"  slide {page['slide_index']}: {issue.get('code', issue.get('category', '?'))} {issue.get('path', '')}")
+            print(f"validation: {'PASS' if result['passed'] else 'FAIL'}")
+            return 0 if result["passed"] else 2
+        return 0
     parser.print_help(); return 0
 
 
