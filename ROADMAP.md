@@ -78,6 +78,54 @@ Status legend: `[x]` shipped in code, `[~]` partial / v1 scope, `[ ]` not starte
 - [x] theme recorded in the IR, so a later `ir-to-pptx` reproduces the same design
 - [x] stock Office dark slots rejected when they fall outside the brand hue family
 
+## V1.3 — Area-weighted palette
+- [x] `ppt_agent.palette`: schemeClr resolved through the theme, colours weighted by painted area
+- [x] `analyze_pptx` emits `dominant_palette`; `theme_from_dna` prefers it over literal srgbClr counts
+- [x] a deck painted mostly with theme accent1 no longer misreads as its minority hard-coded colour
+
+## V1.4 — Clone-shell route
+- [x] `ppt_agent.clone_shell.CloneShell`: classify template slides into shells by layout name,
+      hand out cleared bodies, prune unused shells and reorder
+- [x] shared primitives: `box`, `copy_logos`, `set_geom` (raw `prstGeom` patching), `gradient_fill`
+- [x] per-page layout audit (`audit_pages`: overflow / collision / empty / duplicate)
+
+## V1.5 — Cover & content chrome
+- [x] `rebuild_cover`: photo → freeform bands → logos → label pill → 44pt title → meta z-order
+- [x] `add_content_chrome` (clear → bar → dots → divider → logos) and title repositioning
+- [x] default typography 思源雅黑
+
+## V1.6 — Page kits
+- [x] `ppt_agent.page_kits`: content header, four role cards, org chart, two-panel icon list,
+      dated progress narrative with status chips, homePlate stage timeline
+- [x] duplicate-audit refinement: exactly-2 occurrences = bug, ≥3 short strings = card field labels
+
+## V1.7 — Rotation as a first-class citizen
+- [x] `set_xfrm` / `shape_rot` / `rotated_bbox` / `clone_shape` — `left/top/width/height` do not
+      carry `rot`/`flip`, and re-drawing from the unrotated frame was the most expensive bug class
+- [x] gradient stops accept per-stop alpha + `rot_with_shape` (the template's header is an
+      `@15% → @0%` translucent wash, not an opaque band)
+- [x] inherit-don't-redraw: `layout_chrome()` probe; `add_content_chrome` draws nothing when the
+      layout already paints the chrome; `audit_pages` gains the `doubling` check
+- [x] kits: chapter page, 2×2 quad cards, N-column cards, homePlate stage cards
+
+## V1.8 — Per-page-kind Template DNA (v0.4)
+- [x] `ppt_agent.page_dna`: `template-dna/v0.4` — cover / toc / section / content / closing DNA
+      over the full master → layout → slide stack with one global render order
+- [x] full attribute capture: preset geometry + adj (or custGeom census), rotation/flip with a
+      rotation-aware bbox, per-stop gradient alpha, run colour alpha, picture `alphaModFix` +
+      crop + media fingerprint, line caps/heads/joins, effects, `p:bg` declared vs inherited
+- [x] page-kind `ornaments`: the shapes present on every page of a kind = the chrome to inherit
+- [x] `rebuild_closing` reuses the shell's own media (photo + translucent wave bands) instead of
+      redrawing an opaque full-bleed background
+
+## V1.9 — TOC kit & placeholder hygiene
+- [x] `toc_page` kit reproducing the reference TOC geometry (translucent deco circle included)
+- [x] `drop_empty_placeholders` + `layout_placeholder_text`; `clear_body(keep=...)` for pages that
+      own their header
+- [x] `audit_pages` gains `stale_placeholder`: an empty placeholder resolves back to its layout
+      twin, so the layout's skeleton prompt (`单击此处编辑母版标题样式`) gets painted — drop it,
+      don't blank it
+
 ## Renderer v1 scope
 
 The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emits an editable `.pptx`:
@@ -117,7 +165,8 @@ semantic slide → design.design_presentation() → positioned, styled IR → pe
 
 Tracked for the next cycle:
 
-- gradient fills fall back to solid in both engines
+- gradient fills fall back to solid in both design-layer engines (the clone-shell route
+  `clone_shell` + `page_kits` emits gradients and alpha natively)
 - `chart` components render as labelled placeholders on both engines
 - embedded image bytes require `data.bytes`/`data.path`
 - flow layout estimates text height arithmetically rather than measuring glyphs, so a very long single

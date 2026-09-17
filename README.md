@@ -15,7 +15,17 @@
 - **中文文档：** 当前 README
 - **English:** see the English sections below
 
-## 当前版本：V1.2
+## 当前版本：V1.9
+
+V1.9 补上了**目录页与占位符治理**：`toc_page` 套件按参考版几何 1:1 复刻目录页（含近乎透明的装饰大圆）；空占位符被正式判定为"死模板 DNA"——`drop_empty_placeholders()` 删除它，`audit_pages` 的 `stale_placeholder` 检查拦住它。空占位符并不惰性：渲染器会把它回退到版式孪生占位符，于是版式里的骨架文本（`单击此处编辑母版标题样式`）被画到页面顶部。
+
+V1.8 把 Template DNA 升级为**按页型逐层提取**（`template-dna/v0.4`，`page_dna.py`）：封面 / 目录 / 章节 / 内容 / 封底五类页各自一份完整图层栈（母版 → 版式 → 幻灯片统一绘制顺序），并覆盖旋转/翻转与旋转后真实外框、渐变**逐停靠 alpha**、run 级颜色 alpha、图片 `alphaModFix` 与媒体指纹。正是这次升级把"封底丢底图满屏实心蓝、目录装饰圆不透明盖住章节文字、章节横幅被画成竖条"三处缺陷一次抓了出来。
+
+V1.7 让**旋转与翻转成为一等公民**（`set_xfrm` / `rotated_bbox` / `clone_shape`），并确立克隆壳路线的铁律：版式已经绘制的装饰**继承而非重画**——`layout_chrome()` 探测版式装饰，`audit_pages` 的 `doubling` 检查拦截重画。
+
+V1.5–V1.6 沉淀 **page_kits 页面套件**（章节页 / 目录页 / 四方职责卡 / 组织架构图 / 双栏清单 / 推进纪实 / 阶段时间轴 / 2×2 卡 / N 列卡），默认字体统一为思源雅黑。
+
+V1.3–V1.4 开辟**克隆壳路线**并重做调色板：`CloneShell` 按版式分壳、清屏注入、剪枝重排，未触碰的装饰与模板字节级一致；`palette.py` 用**面积加权**（schemeClr 经主题解析）替代字面量计数，模板主色不再被少量硬编码色带偏。
 
 V1.2 补上了**模板闭环**：`build --template 你的模板.pptx` 会从参考 PPT 提取配色、字体与字号阶梯，让设计继承那份 PPT 的视觉身份，而不是套用内置预设。
 
@@ -41,6 +51,16 @@ V1.1 设计层（主题令牌 + 版式合成器，在 IR 层产出带几何与�
 V1.1 可视化闭环（PPTX → PNG 光栅预览，门禁由"结构检查"升级为"渲染检查"）
         +
 V1.2 模板闭环（Template DNA → 主题令牌，产物继承参考 PPT 的配色与字体）
+        +
+V1.3–V1.4 克隆壳路线 + 面积加权调色板（CloneShell / palette）
+        +
+V1.5–V1.6 page_kits 页面套件（职责卡 / 组织架构 / 时间轴 / 目录）
+        +
+V1.7 旋转一等公民（set_xfrm / rotated_bbox / clone_shape）+ 继承不重画 + doubling 审计
+        +
+V1.8 按页型逐层 Template DNA（template-dna/v0.4，page_dna）
+        +
+V1.9 空占位符治理（drop_empty_placeholders / stale_placeholder 审计）
 ```
 
 ## 项目定位
@@ -161,6 +181,45 @@ ppt-agent-mcp --workspace /path/to/sandbox
 
 详见 [`docs/mcp.md`](docs/mcp.md)。
 
+### 12. 模板克隆壳路线：装饰继承而非重画
+
+设计层路线（`build`）从零绘制页面，适合"白纸起稿"；但当你手里已经有一份模板 PPT，更保真的做法是**克隆壳**：把整份模板复制为可写副本，按版式名把它的幻灯片分类成壳（封面 / 章节 / 内容 / 封底），逐页清屏注入内容，最后剪枝重排——未触碰的照片、LOGO、自由曲线、渐变与模板**字节级一致**，不存在"重新渲染的近似"。
+
+```python
+from ppt_agent.clone_shell import CloneShell, audit_pages, rebuild_cover
+
+deck = CloneShell("template.pptx")          # 按版式名分壳
+idx, slide = deck.take("content")           # 取一个内容壳，body 已清屏
+# ...注入内容...
+deck.finish("out.pptx", order=[0, 2, 3])    # 剪枝 + 重排 + 保存
+
+issues = audit_pages(deck.prs)              # 溢出 / 碰撞 / 空页 / 重复 / 重画 / 空占位符
+```
+
+这条路线沉淀了一组旋转感知原语，全部来自真实翻车教训：
+
+| 原语 | 解决的问题 |
+|---|---|
+| `set_xfrm(rot=90, flip_h=True)` | python-pptx 的 `left/top/width/height` **不携带 rot/flip**，照框号重画会把模板里横置的章节横幅画成竖条 |
+| `rotated_bbox(shape)` | 布局计算（越界 / 重叠 / 遮挡）必须用旋转后的真实外框，而不是未旋转的框 |
+| `clone_shape(src, dst)` | 复用模板装饰的正解是整份深拷 XML（连 rot 与自定义几何一起搬），而不是重画 |
+| `gradient_fill((pos, hex, alpha_pct))` | 模板顶栏实为 `#1185FE @15% → @0%` 的透明渐隐条；画成实心蓝条就是"控件比参考版差"的根源 |
+| `layout_chrome(slide)` | 探测版式已提供的装饰；`add_content_chrome` 据此**继承不重画**（重画 = LOGO 叠两层 + 透明条被实心条盖住） |
+| `drop_empty_placeholders` | 空占位符不是惰性的——渲染器会回退到版式孪生占位符，把骨架文本画出来 |
+
+`audit_pages` 是这条路线的质量门禁：`overflow / collision / empty / duplicate / doubling / stale_placeholder` 六类检查，零 issue 才算交付。
+
+### 13. 按页型的 Template DNA v0.4
+
+`page_dna.extract_deck_dna()` 把 DNA 提取从"每页一张扁平形状表"升级为**按页型逐层提取**（`template-dna/v0.4`）：
+
+- **页型**：`cover / toc / section / content / closing` 五类，判定优先级 = 页位 → 标题文本（目录页常复用内容页版式，所以 `目录` 先于版式名）→ 版式名 → 结构信号（旋转横幅 + 极少形状 = 章节页）。
+- **图层栈**：每页输出母版 → 版式 → 幻灯片的**完整渲染栈**与全局绘制顺序——"谁盖住谁"第一次可直接回答。
+- **全属性**：预设几何 + adj 调整值（或 custGeom 路径统计）、旋转/翻转 + 旋转后真实外框、渐变**逐停靠** alpha、run 级字体与颜色 alpha、图片 `alphaModFix`/裁剪/媒体指纹、线型/箭头/连接、效果。
+- **页型级 ornaments**：该类页**每页都有**的形状集合即真 chrome——克隆时应当继承而非重画的那份清单。
+
+v0.3 的全部键（`slides` / `special_surfaces` / `masters` / `theme` / 统计）仍照常输出，老消费者无需改动；`analyze_pptx` 是它的薄包装。
+
 ## 整体架构
 
 ```text
@@ -221,7 +280,11 @@ ppt-agent/
 │   ├── ir.py              # Universal IR 数据模型
 │   ├── markdown.py        # Markdown → IR
 │   ├── story.py           # Story Architect（叙事大纲 → IR）
-│   ├── template.py        # PPTX → Template DNA
+│   ├── template.py        # PPTX → Template DNA（analyze_pptx 委托 page_dna）
+│   ├── page_dna.py        # 按页型逐层 Template DNA（template-dna/v0.4）：图层栈 / 旋转 / 逐停靠 alpha
+│   ├── palette.py         # 面积加权调色板（schemeClr 经主题解析，区域加权）
+│   ├── clone_shell.py     # 模板克隆壳：分壳清屏注入剪枝重排 + 旋转感知原语 + 页面审计
+│   ├── page_kits.py       # 可复用页面套件：目录 / 章节 / 职责卡 / 组织架构 / 时间轴等
 │   ├── dna_to_ir.py       # Template DNA → IR
 │   ├── renderer.py        # 原生可编辑 PPTX（底层实现）
 │   ├── renderers/         # 渲染器 SDK：协议 / 注册表 / native / html
@@ -242,7 +305,7 @@ ppt-agent/
 ├── schemas/           # 能力描述 / 交付清单 Schema
 ├── scripts/           # 发布脚本
 ├── skills/            # 可移植 Skill
-├── tests/             # 自动化测试（179 项）
+├── tests/             # 自动化测试（234 项）
 ├── docs/              # 技术文档
 └── .github/           # GitHub Actions / Issue / PR 配置
 ```
@@ -359,7 +422,7 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 ## 测试
 
 ```bash
-pytest -q                      # 179 项
+pytest -q                      # 234 项
 ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 python scripts/release.py build && python scripts/release.py verify
 ```
@@ -379,6 +442,17 @@ Pillow rasteriser, so visual gates run in `mode=rendered` even on a machine with
 V1.2 closes the template loop: `build --template ref.pptx` derives the theme tokens from the
 reference deck Template DNA — palette, fonts and type scale — so the output carries that deck
 visual identity instead of a built-in preset.
+
+V1.3–V1.9 add a second, higher-fidelity production route: the **template clone shell**
+(`ppt_agent.clone_shell`) — classify the template's slides into shells by layout, clear and inject
+per page, prune and reorder, so untouched photos / logos / freeforms stay byte-identical — plus
+**page kits** (`ppt_agent.page_kits`: TOC, chapter divider, responsibility cards, org chart,
+timelines), rotation-aware primitives (`set_xfrm` / `rotated_bbox` / `clone_shape`), gradients with
+per-stop alpha, an **inherit-don't-redraw** chrome rule enforced by the `audit_pages` `doubling`
+check, and **per-page-kind Template DNA v0.4** (`ppt_agent.page_dna`: cover / toc / section /
+content / closing layer stacks with global paint order, rotation-aware bboxes and alpha
+everywhere). Empty placeholders are treated as dead template DNA and are dropped and audited
+(`stale_placeholder`), because renderers resolve them back to the layout's skeleton prompt.
 
 The core architecture is model-agnostic and agent-host-agnostic. It is designed to support different
 LLMs, agent hosts, rendering engines and Office environments through explicit adapters.
