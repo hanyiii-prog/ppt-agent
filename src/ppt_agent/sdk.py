@@ -132,6 +132,34 @@ class PptAgent:
             return template_dna_to_ir(json.loads(path.read_text(encoding="utf-8")), source=path.name)
         return template_dna_to_ir(self.analyze_template(path), source=path.name)
 
+    # --- clone-shell route --------------------------------------------------
+    def clone_plan(self, template: str | Path) -> dict[str, Any]:
+        """Inspect a template for the clone route: shells by role plus the
+        per-page-kind DNA summary an agent needs to write a page plan."""
+        from .clone_build import plan_template
+
+        return plan_template(Path(template))
+
+    def clone_build(
+        self,
+        template: str | Path,
+        pages: list[dict[str, Any]],
+        output: str | Path,
+        *,
+        audit: bool = True,
+    ) -> dict[str, Any]:
+        """Render a JSON page plan through the clone route (see
+        `ppt_agent.clone_build`); returns artifact paths and the page audit."""
+        from .clone_build import render_clone_deck
+
+        return render_clone_deck(template, pages, output, audit=audit)
+
+    def clone_audit(self, pptx: str | Path) -> dict[str, Any]:
+        """Run the clone-route page audit over a finished deck."""
+        from .clone_build import audit_deck
+
+        return audit_deck(Path(pptx))
+
     # --- IR io ------------------------------------------------------------
     def load_ir(self, path: str | Path) -> Presentation:
         import json
