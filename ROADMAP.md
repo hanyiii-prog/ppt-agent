@@ -126,6 +126,16 @@ Status legend: `[x]` shipped in code, `[~]` partial / v1 scope, `[ ]` not starte
       twin, so the layout's skeleton prompt (`单击此处编辑母版标题样式`) gets painted — drop it,
       don't blank it
 
+## V1.10 — Clone route on the MCP surface
+- [x] `ppt_agent.clone_build`: a JSON page plan → `CloneShell` buckets → kit dispatch → audit;
+      kit kwargs are the `page_kits` signatures verbatim, named errors for bad roles/kits/missing
+      data/insufficient shells before any file is written
+- [x] SDK: `PptAgent.clone_plan` / `clone_build` / `clone_audit`
+- [x] MCP tools `ppt_agent_clone_plan` / `ppt_agent_clone_build` / `ppt_agent_clone_audit`
+      (13 tools total) — the byte-identical-template route needs no Python from the host agent
+- [x] `quad_cards` note fix: with a note bar the card rows compress to clear it; without one the
+      exact reference geometry is kept (the note used to overlap the second row by ~0.6in)
+
 ## Renderer v1 scope
 
 The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emits an editable `.pptx`:

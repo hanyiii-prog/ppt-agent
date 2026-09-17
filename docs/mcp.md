@@ -35,7 +35,7 @@ and stable, so it is implemented directly in `ppt_agent/mcp/`.
 | `initialize` | Agrees on the newest protocol version in `MCP_PROTOCOL_VERSIONS`, returns server info and instructions |
 | `notifications/initialized`, `notifications/cancelled` | Accepted and never answered |
 | `ping` | Returns `{}` |
-| `tools/list` | Returns all 10 tools with JSON Schema input definitions |
+| `tools/list` | Returns all 13 tools with JSON Schema input definitions |
 | `tools/call` | Executes a tool; failures come back as `isError: true` content, not JSON-RPC errors |
 | `resources/list`, `resources/templates/list`, `prompts/list` | Empty listings (reserved for later use) |
 
@@ -44,8 +44,8 @@ stdout carries protocol traffic only; diagnostics go to stderr.
 
 ## Tools
 
-All ten are thin wrappers over `ppt_agent.sdk.PptAgent`, so the tool surface cannot drift from the SDK
-or the CLI.
+All ten of the IR-route tools are thin wrappers over `ppt_agent.sdk.PptAgent`, so the tool surface
+cannot drift from the SDK or the CLI; the clone trio wraps `PptAgent.clone_*` the same way.
 
 | Tool | Purpose |
 |---|---|
@@ -59,6 +59,9 @@ or the CLI.
 | `ppt_agent_audit_facts` | Check every textual claim against a fact registry |
 | `ppt_agent_build` | End to end: plan → build → gate, returning the delivery manifest |
 | `ppt_agent_host_profile` | Inspect capability negotiation for a named host platform |
+| `ppt_agent_clone_plan` | Clone route step 1: shells by role + per-page-kind DNA summaries + valid roles/kits |
+| `ppt_agent_clone_build` | Clone route step 2: render a JSON page plan through the template's own shells, then audit |
+| `ppt_agent_clone_audit` | Clone route step 3: run the six-kind page audit over any deck |
 
 ### Typical call sequence
 
@@ -71,6 +74,29 @@ ppt_agent_build                # IR + PPTX + HTML + gate + manifest
       ↓
 ppt_agent_audit_facts          # only when the deck carries metrics or conclusions
 ```
+
+## The clone route on the MCP surface
+
+The IR/design route above re-draws every page from theme tokens. When the deliverable is
+"looks like THIS template", three more tools drive the clone-shell route — the one where
+untouched photos / logos / freeforms stay byte-identical — without writing any Python:
+
+```text
+ppt_agent_clone_plan(template)
+        # shells by role, per-page-kind DNA, the ornaments to inherit, valid kits
+        ↓
+ppt_agent_clone_build(template, pages=[...], output)
+        # one shell per spec: cover/closing rebuild their chrome, section/toc inherit
+        # the layout band, content pages dispatch to the named page kit; then audit
+        ↓
+ppt_agent_clone_audit(pptx)    # zero issues is the delivery bar
+```
+
+A `pages` entry is plain data: `{"role": "content", "title": "...", "lead": "...",
+"kit": "four_role_cards", "cards": [...], "note": "..."}`. Kit kwargs are the `page_kits`
+signatures verbatim, so kits can grow without the tool surface changing. Bad plans fail
+with named errors (unknown role/kit, missing kit data, insufficient shells) before any
+file is written; the built deck comes back with its `audit` report attached.
 
 ## Workspace containment
 
