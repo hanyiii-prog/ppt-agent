@@ -6,6 +6,7 @@ from typing import Any
 
 from .fidelity import extract_fidelity_dna
 from .fidelity_diff import FidelityReport, compare_dna
+from .fidelity_repair import repair_plan_dict
 
 
 def compare_decks(
@@ -18,6 +19,8 @@ def compare_decks(
 
     The result is deterministic and page-addressable. A deck passes only when
     slide count, slide size and every extracted slide DNA payload pass.
+    Failed pages also expose deterministic repair directives for the next
+    build/render pass; the gate itself never mutates either package.
     """
     reference = Path(reference)
     candidate = Path(candidate)
@@ -31,14 +34,26 @@ def compare_decks(
     pages: list[dict[str, Any]] = []
     for index in range(1, max(ref_count, cand_count) + 1):
         if index > ref_count or index > cand_count:
-            pages.append({"slide_index": index, "passed": False, "issues": [{"path": "slide", "category": "page_kind", "message": "slide missing"}]})
+            pages.append(
+                {
+                    "slide_index": index,
+                    "passed": False,
+                    "issues": [{"path": "slide", "category": "page_kind", "message": "slide missing"}],
+                    "repair_plan": {
+                        "schema": "template-dna/fidelity-repair/v1",
+                        "issue_count": 1,
+                        "directive_count": 0,
+                        "directives": [],
+                    },
+                }
+            )
             continue
         report: FidelityReport = compare_dna(
             extract_fidelity_dna(reference, slide_index=index),
             extract_fidelity_dna(candidate, slide_index=index),
             tolerance=tolerance,
         )
-        pages.append({"slide_index": index, **report.to_dict()})
+        pages.append({"slide_index": index, **report.to_dict(), "repair_plan": repair_plan_dict(report)})
 
     package_issues = []
     if ref_count != cand_count:
