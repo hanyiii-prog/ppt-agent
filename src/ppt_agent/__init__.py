@@ -22,6 +22,7 @@ from .contracts import (
 )
 from .fidelity_diff import FidelityIssue, FidelityReport, assert_fidelity, compare_dna
 from .fidelity_gate import assert_deck_fidelity, compare_decks
+from .fidelity_repair import RepairDirective, plan_from_report, plan_repairs, repair_plan_dict
 
 __version__ = "1.11.0"
 
@@ -38,6 +39,7 @@ __all__ = [
     "PptAgent",
     "RENDERER_SDK_VERSION",
     "SUPPORTED_IR_VERSIONS",
+    "RepairDirective",
     "__version__",
     "assert_deck_fidelity",
     "assert_fidelity",
@@ -45,6 +47,9 @@ __all__ = [
     "compare_dna",
     "contract_descriptor",
     "negotiate",
+    "plan_from_report",
+    "plan_repairs",
+    "repair_plan_dict",
 ]
 
 
