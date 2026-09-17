@@ -22,35 +22,21 @@ jobs:
       - name: Probe every test file, report failures as ::error:: annotations
         run: |
           set -u
-          rm -f probe-failures.txt probe-passed.txt probe-log.txt
+          rm -f probe-failures.txt probe-passed.txt probe-log.txt probe-detail.txt
           for f in tests/test_*.py; do
             if pytest "$f" -q > probe-log.txt 2>&1; then
               echo "PASS $f" >> probe-passed.txt
             else
               echo "FAIL $f" >> probe-failures.txt
-              echo "=== $f ===" >> probe-failures-detail.txt
-              grep -E "^(FAILED|ERROR)" probe-log.txt | head -10 >> probe-failures-detail.txt || true
-              tail -12 probe-log.txt >> probe-failures-detail.txt || true
+              echo "=== $f ===" >> probe-detail.txt
+              grep -E "^(FAILED|ERROR)" probe-log.txt | head -8 >> probe-detail.txt || true
+              tail -10 probe-log.txt >> probe-detail.txt || true
             fi
           done
           echo "--- passed ---"
           cat probe-passed.txt || true
           echo "--- failed files ---"
           cat probe-failures.txt || true
-          if [ -f probe-failures-detail.txt ]; then
-            # emit annotations in ~800-char chunks (annotation limit is 1KB)
-            python - <<'PY'
-            from pathlib import Path
-            text = Path("probe-failures-detail.txt").read_text(encoding="utf-8", errors="replace")
-            chunk = ""
-            for line in text.splitlines():
-                if len(chunk) + len(line) + 1 > 700:
-                    if chunk:
-                        print(f"::error::PROBE {chunk}")
-                    chunk = line
-                else:
-                    chunk = f"{chunk}\n{line}" if chunk else line
-            if chunk:
-                print(f"::error::PROBE {chunk}")
-            PY
+          if [ -f probe-detail.txt ]; then
+            head -c 6000 probe-detail.txt | tr '\n' '|' | fold -w 650 | sed 's/^/::error::PROBE /'
           fi
