@@ -7,6 +7,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
+class VisualGateUnavailable(RuntimeError):
+    """Raised only when no supported rasterisation backend is installed."""
+
+
 @dataclass
 class PageMetrics:
     page: int
@@ -104,7 +108,7 @@ def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144) -> list[Path]:
     """Render a PPTX to one PNG per slide."""
     backend = preview_backend()
     if backend is None:
-        raise RuntimeError(
+        raise VisualGateUnavailable(
             "no rasteriser available: install LibreOffice (soffice + pdftoppm) "
             "or Pillow to enable visual gates"
         )
@@ -214,3 +218,20 @@ def write_report(report: VisualReport, output: Path) -> None:
     from .textio import write_json_lf
 
     write_json_lf(output, report.to_dict())
+
+
+__all__ = [
+    "PageMetrics",
+    "VisualGateUnavailable",
+    "VisualReport",
+    "compare_images",
+    "flatten_pixels",
+    "office_binary",
+    "preview_backend",
+    "rasteriser_available",
+    "rasteriser_tools",
+    "render_and_compare",
+    "render_pptx",
+    "visual_regression",
+    "write_report",
+]
