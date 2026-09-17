@@ -30,6 +30,9 @@ EXPECTED_TOOLS = {
     "ppt_agent_audit_facts",
     "ppt_agent_build",
     "ppt_agent_host_profile",
+    "ppt_agent_clone_plan",
+    "ppt_agent_clone_build",
+    "ppt_agent_clone_audit",
 }
 
 
