@@ -20,9 +20,10 @@ def validate_deck_fidelity(
 ) -> dict[str, Any]:
     """Run structural fidelity first, then optional rendered-page comparison.
 
-    Structural failure is never masked by a visual pass. If rendering is
-    requested but unavailable, the result is explicitly ``visual.status`` =
-    ``unavailable`` rather than being reported as a pass.
+    Structural failure is never masked by a visual pass. A missing renderer is
+    explicitly reported as ``unavailable``; an installed renderer that fails
+    during conversion is reported as ``error`` so infrastructure defects are
+    not silently downgraded to a capability warning.
     """
     structural = compare_decks(reference, candidate, tolerance=tolerance)
     result: dict[str, Any] = {
@@ -36,7 +37,6 @@ def validate_deck_fidelity(
 
     try:
         from .visual_regression import render_and_compare
-
         visual = render_and_compare(
             Path(reference),
             Path(candidate),
@@ -46,8 +46,10 @@ def validate_deck_fidelity(
             threshold_mismatch=threshold_mismatch,
         )
     except Exception as exc:
+        from .visual_regression import VisualGateUnavailable
+        unavailable = isinstance(exc, VisualGateUnavailable)
         result["visual"] = {
-            "status": "unavailable",
+            "status": "unavailable" if unavailable else "error",
             "passed": False,
             "error": str(exc),
         }
@@ -71,6 +73,8 @@ def assert_deck_fidelity_pipeline(*args: Any, **kwargs: Any) -> dict[str, Any]:
             raise AssertionError("Fidelity pipeline failed structural gate")
         if visual.get("status") == "unavailable":
             raise AssertionError(f"Fidelity pipeline visual gate unavailable: {visual.get('error', '')}")
+        if visual.get("status") == "error":
+            raise AssertionError(f"Fidelity pipeline visual gate error: {visual.get('error', '')}")
         raise AssertionError("Fidelity pipeline failed visual gate")
     return result
 
