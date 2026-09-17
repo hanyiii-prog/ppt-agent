@@ -3,10 +3,19 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import zipfile
 
 from .fidelity import extract_fidelity_dna
 from .fidelity_diff import FidelityReport, compare_dna
 from .fidelity_repair import repair_plan_dict
+
+
+def _extract(path: Path, slide_index: int) -> dict[str, Any]:
+    """Normalize malformed OOXML packages into the gate's public error type."""
+    try:
+        return extract_fidelity_dna(path, slide_index=slide_index)
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise ValueError(f"invalid PPTX package: {path}") from exc
 
 
 def compare_decks(
@@ -24,8 +33,8 @@ def compare_decks(
     """
     reference = Path(reference)
     candidate = Path(candidate)
-    ref_first = extract_fidelity_dna(reference, slide_index=1)
-    cand_first = extract_fidelity_dna(candidate, slide_index=1)
+    ref_first = _extract(reference, slide_index=1)
+    cand_first = _extract(candidate, slide_index=1)
     ref_count = ref_first["presentation"]["slide_count"]
     cand_count = cand_first["presentation"]["slide_count"]
     ref_size = ref_first["presentation"]["slide_size_emu"]
@@ -49,8 +58,8 @@ def compare_decks(
             )
             continue
         report: FidelityReport = compare_dna(
-            extract_fidelity_dna(reference, slide_index=index),
-            extract_fidelity_dna(candidate, slide_index=index),
+            _extract(reference, slide_index=index),
+            _extract(candidate, slide_index=index),
             tolerance=tolerance,
         )
         pages.append({"slide_index": index, **report.to_dict(), "repair_plan": repair_plan_dict(report)})
