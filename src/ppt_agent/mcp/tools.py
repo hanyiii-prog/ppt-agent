@@ -243,6 +243,34 @@ def tool_host_profile(arguments: dict[str, Any], context: ToolContext) -> dict[s
     }
 
 
+def _page_specs(arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    pages = arguments.get("pages")
+    if not isinstance(pages, list) or not pages:
+        raise ToolError("'pages' must be a non-empty array of page-spec objects")
+    if not all(isinstance(page, dict) for page in pages):
+        raise ToolError("every entry in 'pages' must be an object")
+    return pages
+
+
+def tool_clone_plan(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    template = context.input_path(_string(arguments, "template"))
+    return context.agent.clone_plan(template)
+
+
+def tool_clone_build(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    template = context.input_path(_string(arguments, "template"))
+    pages = _page_specs(arguments)
+    output = context.output_path(_string(arguments, "output"))
+    return context.agent.clone_build(
+        template, pages, output, audit=bool(arguments.get("audit", True))
+    )
+
+
+def tool_clone_audit(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    deck = context.input_path(_string(arguments, "pptx"))
+    return context.agent.clone_audit(deck)
+
+
 TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str, Any]]] = {
     "ppt_agent_capabilities": tool_capabilities,
     "ppt_agent_analyze_pptx": tool_analyze_pptx,
@@ -254,6 +282,9 @@ TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str
     "ppt_agent_audit_facts": tool_audit_facts,
     "ppt_agent_build": tool_build,
     "ppt_agent_host_profile": tool_host_profile,
+    "ppt_agent_clone_plan": tool_clone_plan,
+    "ppt_agent_clone_build": tool_clone_build,
+    "ppt_agent_clone_audit": tool_clone_audit,
 }
 
 
@@ -286,6 +317,31 @@ _PROP_STORY_META = {
     "title": {"type": "string", "description": "Deck title override"},
     "audience": {"type": "string", "description": "Who will read the deck"},
     "objective": {"type": "string", "description": "What the deck must achieve"},
+}
+
+_PROP_CLONE_PAGES = {
+    "type": "array",
+    "description": (
+        "Page plan, in final order. Each spec: role (cover/toc/section/content/"
+        "closing) plus its data -- cover: pill/title/meta; closing: title/sub/meta; "
+        "section: title/lines; toc: title/items/note; content: title/lead/kit + the "
+        "kit's data (four_role_cards, org_chart, two_panel_list, quad_cards, "
+        "column_cards, stage_cards, progress_timeline, stage_timeline). Unknown "
+        "keys are forwarded to the kit as keyword arguments."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "role": {"type": "string", "enum": ["cover", "toc", "section", "content", "closing"]},
+            "kit": {"type": "string", "enum": ["four_role_cards", "org_chart", "two_panel_list",
+                                               "quad_cards", "column_cards", "stage_cards",
+                                               "progress_timeline", "stage_timeline"]},
+            "title": {"type": "string"},
+            "lead": {"type": "string"},
+        },
+        "required": ["role"],
+        "additionalProperties": True,
+    },
 }
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -410,6 +466,47 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "required": {"type": "array", "items": {"type": "string"}},
             },
             ["host"],
+        ),
+    },
+    {
+        "name": "ppt_agent_clone_plan",
+        "description": (
+            "Clone route, step 1: inspect a template -- shells by role, per-page-kind "
+            "DNA counts and layer-stack summaries (the ornaments a build must inherit "
+            "rather than redraw), plus the valid roles and kits for clone_build."
+        ),
+        "inputSchema": _schema(
+            {"template": {"type": "string", "description": "Path to the template PPTX"}},
+            ["template"],
+        ),
+    },
+    {
+        "name": "ppt_agent_clone_build",
+        "description": (
+            "Clone route, step 2: render a JSON page plan through the template's own "
+            "shells -- untouched photos / logos / freeforms stay byte-identical -- then "
+            "audit the result. Cover/closing rebuild their chrome; section/toc inherit "
+            "the layout band; content pages dispatch to the named page kit."
+        ),
+        "inputSchema": _schema(
+            {
+                "template": {"type": "string", "description": "Path to the template PPTX"},
+                "pages": _PROP_CLONE_PAGES,
+                "output": {"type": "string", "description": "Destination .pptx path inside the workspace"},
+                "audit": {"type": "boolean", "description": "Run audit_pages over the result (default true)"},
+            },
+            ["template", "pages", "output"],
+        ),
+    },
+    {
+        "name": "ppt_agent_clone_audit",
+        "description": (
+            "Clone route, step 3: run the six-kind page audit (overflow / collision / "
+            "empty / duplicate / doubling / stale_placeholder) over any deck."
+        ),
+        "inputSchema": _schema(
+            {"pptx": {"type": "string", "description": "Path to the deck to audit"}},
+            ["pptx"],
         ),
     },
 ]

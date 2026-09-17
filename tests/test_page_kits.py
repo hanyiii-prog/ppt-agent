@@ -124,7 +124,7 @@ def test_quad_cards_matches_reference_grid(content_slide):
     cards = [{"title": f"要点{i}",
               "body": [("不追求一步到位", "b"), ("以点带面跑通试点", "i")]}
              for i in range(4)]
-    K.quad_cards(sl, cards, "说明：xxx", title="建设背景", lead="立足务实")
+    K.quad_cards(sl, cards, title="建设背景", lead="立足务实")
     rects = _rects(sl)
     hits = []
     for want in ((0.556, 1.389), (6.806, 1.389), (0.556, 4.250), (6.806, 4.250)):
@@ -134,13 +134,30 @@ def test_quad_cards_matches_reference_grid(content_slide):
         hits.append(bool(hit))
     assert all(hits), "quad grid off reference: %s" % hits
     ts = _texts(sl)
-    assert any("要点3" in t for t in ts) and any("说明：xxx" in t for t in ts)
+    assert any("要点3" in t for t in ts)
     # emphasis run model: bold + inline-blue runs both survive
     styled = {r.text: (r.font.bold, r.font.color.rgb)
               for s in sl.shapes if s.has_text_frame
               for p in s.text_frame.paragraphs for r in p.runs}
     assert styled.get("以点带面跑通试点", (None, )) [0] is True
     assert not [i for i in audit_pages(prs) if i["kind"] == "overflow"]
+
+
+def test_quad_cards_note_compresses_the_grid(content_slide):
+    """With a note bar the card rows compress: the second row must clear the
+    bar, and the audit's collision kind stays quiet (the note used to overlap
+    the second row's body text by ~0.6in)."""
+    prs, sl = content_slide
+    cards = [{"title": f"要点{i}", "body": "以点带面跑通试点"} for i in range(4)]
+    K.quad_cards(sl, cards, "说明：不追求一步到位。", title="建设背景", lead="立足务实")
+    assert not [i for i in audit_pages(prs) if i["kind"] == "collision"], \
+        [i for i in audit_pages(prs) if i["kind"] == "collision"]
+    rects = _rects(sl)
+    row2 = [r for r in rects
+            if abs(r[1] - (K.TOP + K.QUAD_PITCH_Y)) < 0.02
+            and abs(r[2] - K.QUAD_CARD[0]) < 0.02]
+    assert row2, "second row missing"
+    assert all(r[1] + r[3] <= K.NOTE_Y for r in row2), row2
 
 
 def test_column_cards_reproduces_four_column_page(content_slide):
