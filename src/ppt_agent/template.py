@@ -1,3 +1,14 @@
+"""Legacy v0.3 extractors.
+
+``analyze_pptx`` now delegates to :mod:`ppt_agent.page_dna` (schema
+``template-dna/v0.4``), which walks the full rendered layer stack per page kind
+and captures rotation / per-stop gradient alpha / run-level colour alpha.
+
+The helpers below are kept because they are part of the public surface: the
+shape-level record and the fill record are unit-tested directly and are still
+useful for one-off, shape-at-a-time inspection.
+"""
+
 from __future__ import annotations
 
 from collections import Counter
@@ -319,63 +330,35 @@ def _extract_master(master: Any) -> dict[str, Any]:
     }
 
 
-def analyze_pptx(path: str | Path) -> dict[str, Any]:
-    """Extract semantic + fidelity Template DNA from a PPTX."""
+def _dominant_palette(path: Path) -> dict:
+    """Area-weighted, schemeClr-resolved palette -- what the deck *looks* like.
+    Delegates to :mod:`ppt_agent.palette`; safe to import (stdlib only)."""
     try:
-        from pptx import Presentation as PptxPresentation
-    except ImportError as exc:
-        raise RuntimeError("python-pptx is required for PPTX analysis; install with pip install 'ppt-agent[pptx]'") from exc
+        from .palette import dominant_colors
+        return dominant_colors(str(path))
+    except Exception:
+        return {}
 
-    source = Path(path)
-    prs = PptxPresentation(str(source))
-    fonts: Counter[str] = Counter(); font_sizes: Counter[float] = Counter()
-    fills: Counter[str] = Counter(); shape_types: Counter[str] = Counter()
-    slides: list[dict[str, Any]] = []
 
-    for slide_no, slide in enumerate(prs.slides, 1):
-        role = "first" if slide_no == 1 else "last" if slide_no == len(prs.slides) else "body"
-        records = [_shape_record(shape, i) for i, shape in enumerate(slide.shapes)]
-        for record in records:
-            shape_types[record["type"]] += 1
-            text = record.get("text") or {}
-            for font in text.get("fonts", []):
-                if font.get("name"): fonts[font["name"]] += 1
-                if font.get("size_pt"): font_sizes[font["size_pt"]] += 1
-            fill_rgb = (record.get("style", {}).get("fill") or {}).get("rgb")
-            if fill_rgb: fills[fill_rgb] += 1
-        slides.append({
-            "slide": slide_no,
-            "role": role,
-            "background": _background_info(slide),
-            "inheritance": _inheritance_info(slide),
-            "layout_name": getattr(slide.slide_layout, "name", None),
-            "layout_signature": _layout_signature(slide),
-            "shapes": records,
-            "raw_slide_xml": getattr(slide._element, "xml", None),
-        })
+def analyze_pptx(
+    path: str | Path,
+    *,
+    include_raw_xml: bool = True,
+    kind_overrides: dict[int, str] | None = None,
+) -> dict[str, Any]:
+    """Extract semantic + fidelity Template DNA from a PPTX.
 
-    masters = [_extract_master(master) for master in prs.slide_masters]
-    return {
-        "schema": "template-dna/v0.3",
-        "source": str(source),
-        "presentation": {
-            "slide_size_inches": {"width": round(prs.slide_width / EMU_PER_INCH, 3), "height": round(prs.slide_height / EMU_PER_INCH, 3)},
-            "slide_count": len(prs.slides),
-            "first_slide_role": "first" if prs.slides else None,
-            "last_slide_role": "last" if prs.slides else None,
-        },
-        "theme": {"colors": _theme_colors(source)},
-        "global_style_statistics": {
-            "fonts": fonts.most_common(20),
-            "font_sizes_pt": font_sizes.most_common(20),
-            "fills_rgb": fills.most_common(20),
-            "shape_types": dict(shape_types),
-        },
-        "masters": masters,
-        "slides": slides,
-        "special_surfaces": {
-            "first": slides[0] if slides else None,
-            "last": slides[-1] if slides else None,
-            "body_slide_count": max(0, len(slides) - 2),
-        },
-    }
+    ``template-dna/v0.4``. The heavy lifting lives in :mod:`ppt_agent.page_dna`,
+    which extracts DNA **per page kind** (cover / toc / section / content /
+    closing) over the full rendered layer stack (master -> layout -> slide)
+    rather than one flat shape list. Every v0.3 key is still emitted.
+
+    ``include_raw_xml=False`` drops the raw OOXML blobs (keeps the hashes) for
+    large decks; ``kind_overrides`` maps 1-based slide numbers to a kind when
+    the layout names are not descriptive enough to classify a page.
+    """
+    from .page_dna import extract_deck_dna
+
+    return extract_deck_dna(
+        path, include_raw_xml=include_raw_xml, kind_overrides=kind_overrides
+    )

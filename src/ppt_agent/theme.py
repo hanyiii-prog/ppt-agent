@@ -33,8 +33,8 @@ class Theme:
     surface: str = "FFFFFF"
 
     # --- typography ---
-    font_title: str = "Microsoft YaHei"
-    font_body: str = "Microsoft YaHei"
+    font_title: str = "思源雅黑"
+    font_body: str = "思源雅黑"
 
     # --- type scale, points ---
     cover_title_pt: float = 40.0
@@ -180,9 +180,26 @@ def _pick_accent(
     primary: tuple[int, int, int],
     mids: Sequence[tuple[tuple[int, int, int], int]],
     scheme: Mapping[str, Any],
+    painted: set[tuple[int, int, int]] | None = None,
 ) -> tuple[int, int, int]:
-    """Pick the colour that reads as a distinct accent against ``primary``."""
+    """Pick the colour that reads as a distinct accent against ``primary``.
+
+    Theme accent slots come first: a deck's own brand system ("what colour
+    pairs with accent1?") is answered by its theme, not by whatever colour
+    happens to cover area -- red text highlights, for instance, are emphasis
+    ink rather than a brand accent. Only when the theme slots fail do we fall
+    back to area-weighted candidates.
+    """
     primary_hue = _hue(primary)
+    used = painted if painted is not None else {rgb for rgb, _ in mids}
+    for slot in ("accent2", "accent3", "accent4", "accent5", "accent6"):
+        rgb = _rgb_tuple(scheme.get(slot, ""))
+        if rgb is None or rgb not in used:
+            continue  # a stock Office default slot the deck never paints is not a brand decision
+        # >=20 deg: enough to read as a different colour (a cyan beside a brand
+        # blue is a deliberate pairing); near-identical hues are not accents.
+        if _saturation(rgb) >= 0.18 and _hue_distance(_hue(rgb), primary_hue) >= 20.0:
+            return rgb
     distant = [
         (rgb, weight)
         for rgb, weight in mids
@@ -217,16 +234,42 @@ def theme_from_dna(dna: Any, *, name: str = "template") -> Theme:
     scheme = scheme if isinstance(scheme, dict) else {}
 
     # --- colour candidates, weighted by how often the deck actually uses them
+    # --- colour candidates. Prefer the AREA-WEIGHTED palette (resolves
+    # schemeClr through the theme, weights by physical size) over the literal
+    # srgbClr counts: a deck painted mostly with theme accent1 "looks" like that
+    # accent even when only a handful of shapes hard-code the hex. Counting
+    # literals alone can promote a minor hard-coded colour (34 purple autoshapes)
+    # over the real brand (blue painted across 1000+ sq in). See palette.py.
     weights: Counter[tuple[int, int, int]] = Counter()
-    for entry in stats.get("fills_rgb") or []:
-        if isinstance(entry, (list, tuple)) and len(entry) == 2:
-            rgb = _rgb_tuple(entry[0])
+    pal = dna.get("dominant_palette")
+    pal = pal if isinstance(pal, dict) else {}
+    pal_colors = pal.get("colors")
+    if isinstance(pal_colors, list) and pal_colors:
+        for entry in pal_colors:
+            if not isinstance(entry, dict):
+                continue
+            rgb = _rgb_tuple(entry.get("rgb", ""))
             if rgb is None:
                 continue
             try:
-                weights[rgb] += max(1, int(entry[1]))
+                area = float(entry.get("area", 0.0))
             except (TypeError, ValueError):
-                weights[rgb] += 1
+                area = 0.0
+            weights[rgb] += max(1, int(round(area * 4)))  # area -> pseudo-counts
+    else:
+        for entry in stats.get("fills_rgb") or []:
+            if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                rgb = _rgb_tuple(entry[0])
+                if rgb is None:
+                    continue
+                try:
+                    weights[rgb] += max(1, int(entry[1]))
+                except (TypeError, ValueError):
+                    weights[rgb] += 1
+    # Colours the deck actually paints (area palette or literal fills) --
+    # captured before scheme-slot nudges below, so a stock Office slot that is
+    # never used can't masquerade as a brand colour.
+    painted: set[tuple[int, int, int]] = {rgb for rgb, w in weights.items() if w > 0}
     # Scheme slots matter when the deck paints with theme colours instead of literals.
     for slot in ("accent1", "accent2", "accent3", "accent4", "dk1", "dk2"):
         rgb = _rgb_tuple(scheme.get(slot, ""))
@@ -244,7 +287,7 @@ def theme_from_dna(dna: Any, *, name: str = "template") -> Theme:
         primary = max(inks, key=lambda item: (item[1], -_relative_luminance(item[0])))[0]
     else:
         primary = _rgb_tuple(scheme.get("accent1", "")) or _rgb_tuple(DEFAULT_THEME.primary) or _BLACK
-    accent = _pick_accent(primary, mids, scheme)
+    accent = _pick_accent(primary, mids, scheme, painted)
 
     # Body ink: use the template's own dark scheme slot only when it sits in the
     # same hue family as the brand colour. A stock `dk2` left over from the Office
