@@ -5,10 +5,10 @@ from PIL import Image, ImageDraw
 from ppt_agent.visual_regression import compare_images, visual_regression
 
 
-def _make(path: Path, offset: int = 0) -> None:
-    image = Image.new("RGB", (320, 180), "white")
+def _make(path: Path, offset: int = 0, size: tuple[int, int] = (320, 180)) -> None:
+    image = Image.new("RGB", size, "white")
     draw = ImageDraw.Draw(image)
-    draw.rectangle((40 + offset, 40, 180 + offset, 130), fill="navy")
+    draw.rectangle((40 + offset, 40, min(180 + offset, size[0] - 1), min(130, size[1] - 1)), fill="navy")
     image.save(path)
 
 
@@ -36,3 +36,14 @@ def test_visual_regression_requires_every_page(tmp_path: Path):
     assert not report.passed
     assert report.page_count_reference == 2
     assert report.page_count_candidate == 1
+
+
+def test_visual_regression_rejects_dimension_mismatch(tmp_path: Path):
+    ref_dir = tmp_path / "ref"; cand_dir = tmp_path / "cand"
+    ref_dir.mkdir(); cand_dir.mkdir()
+    _make(ref_dir / "slide-1.png")
+    _make(cand_dir / "slide-1.png", size=(340, 180))
+    report = visual_regression(ref_dir, cand_dir)
+    assert report.passed is False
+    assert report.pages[0].dimension_match is False
+    assert report.pages[0].candidate_width == 340
