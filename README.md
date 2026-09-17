@@ -15,7 +15,9 @@
 - **中文文档：** 当前 README
 - **English:** see the English sections below
 
-## 当前版本：V1.9
+## 当前版本：V1.10
+
+V1.10 把**克隆壳路线搬上了 MCP 工具面**——从此一个 server 就是全部入口：`ppt_agent_clone_plan`（模板壳位与按页型 DNA 体检）→ `ppt_agent_clone_build`（JSON 页面计划 → 分壳注入 → 审计，kit 参数即 `page_kits` 签名）→ `ppt_agent_clone_audit`（六类页面门禁）。宿主 Agent 不写一行 Python 就能驱动"装饰字节级继承"的高保真路线；顺带修掉 `quad_cards` 注脚条与第二行卡片重叠的几何冲突（有注脚时网格自动压缩，无注脚保持参考几何）。
 
 V1.9 补上了**目录页与占位符治理**：`toc_page` 套件按参考版几何 1:1 复刻目录页（含近乎透明的装饰大圆）；空占位符被正式判定为"死模板 DNA"——`drop_empty_placeholders()` 删除它，`audit_pages` 的 `stale_placeholder` 检查拦住它。空占位符并不惰性：渲染器会把它回退到版式孪生占位符，于是版式里的骨架文本（`单击此处编辑母版标题样式`）被画到页面顶部。
 
@@ -61,6 +63,8 @@ V1.7 旋转一等公民（set_xfrm / rotated_bbox / clone_shape）+ 继承不重
 V1.8 按页型逐层 Template DNA（template-dna/v0.4，page_dna）
         +
 V1.9 空占位符治理（drop_empty_placeholders / stale_placeholder 审计）
+        +
+V1.10 克隆壳上 MCP 工具面（clone_plan / clone_build / clone_audit，单入口 13 工具）
 ```
 
 ## 项目定位
@@ -177,7 +181,7 @@ Generate → Render → Critic → 发现问题 → Repair → Rebuild → Rende
 ppt-agent-mcp --workspace /path/to/sandbox
 ```
 
-10 个工具，覆盖能力查询、模板分析、Markdown→IR、IR→PPTX、IR→HTML、IR 质检、PPTX 门禁、事实审计、端到端构建、主机能力画像。传输层是纯标准库实现的换行分隔 JSON-RPC 2.0 —— 引入官方 MCP SDK 会给一个以“核心可移植”为前提的项目增加运行时依赖，而工具宿主真正需要的协议面很小且稳定。
+13 个工具，覆盖能力查询、模板分析、Markdown→IR、IR→PPTX、IR→HTML、IR 质检、PPTX 门禁、事实审计、端到端构建、主机能力画像，以及**克隆壳三件套**（`clone_plan` / `clone_build` / `clone_audit`，见第 12 节——模板高保真复刻从此不需要写 Python）。传输层是纯标准库实现的换行分隔 JSON-RPC 2.0 —— 引入官方 MCP SDK 会给一个以“核心可移植”为前提的项目增加运行时依赖，而工具宿主真正需要的协议面很小且稳定。
 
 详见 [`docs/mcp.md`](docs/mcp.md)。
 
@@ -284,6 +288,7 @@ ppt-agent/
 │   ├── page_dna.py        # 按页型逐层 Template DNA（template-dna/v0.4）：图层栈 / 旋转 / 逐停靠 alpha
 │   ├── palette.py         # 面积加权调色板（schemeClr 经主题解析，区域加权）
 │   ├── clone_shell.py     # 模板克隆壳：分壳清屏注入剪枝重排 + 旋转感知原语 + 页面审计
+│   ├── clone_build.py     # 克隆壳的数据驱动入口：JSON 页面计划 → 分壳 → page_kits 分派 → 审计
 │   ├── page_kits.py       # 可复用页面套件：目录 / 章节 / 职责卡 / 组织架构 / 时间轴等
 │   ├── dna_to_ir.py       # Template DNA → IR
 │   ├── renderer.py        # 原生可编辑 PPTX（底层实现）
@@ -305,7 +310,7 @@ ppt-agent/
 ├── schemas/           # 能力描述 / 交付清单 Schema
 ├── scripts/           # 发布脚本
 ├── skills/            # 可移植 Skill
-├── tests/             # 自动化测试（234 项）
+├── tests/             # 自动化测试（247 项）
 ├── docs/              # 技术文档
 └── .github/           # GitHub Actions / Issue / PR 配置
 ```
@@ -413,7 +418,7 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 |---|---|
 | [`ROADMAP.md`](ROADMAP.md) | 版本进度、渲染器范围、已知限制、契约兼容策略 |
 | [`docs/architecture.md`](docs/architecture.md) | 分层、模块职责、渲染契约、能力降级矩阵 |
-| [`docs/mcp.md`](docs/mcp.md) | MCP server 协议面、10 个工具、workspace 边界 |
+| [`docs/mcp.md`](docs/mcp.md) | MCP server 协议面、13 个工具、克隆壳三件套、workspace 边界 |
 | [`docs/adapters.md`](docs/adapters.md) | 能力模型、声明 vs 实际、协商、主机画像 |
 | [`docs/release.md`](docs/release.md) | 发布清单、漂移校验、契约版本变更流程 |
 | [`docs/production-quality-loop.md`](docs/production-quality-loop.md) | 生产质量循环 |
@@ -422,7 +427,7 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 ## 测试
 
 ```bash
-pytest -q                      # 234 项
+pytest -q                      # 247 项
 ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 python scripts/release.py build && python scripts/release.py verify
 ```
@@ -453,6 +458,12 @@ check, and **per-page-kind Template DNA v0.4** (`ppt_agent.page_dna`: cover / to
 content / closing layer stacks with global paint order, rotation-aware bboxes and alpha
 everywhere). Empty placeholders are treated as dead template DNA and are dropped and audited
 (`stale_placeholder`), because renderers resolve them back to the layout's skeleton prompt.
+
+V1.10 puts the clone route on the MCP tool surface, so one server is the whole entry point:
+`ppt_agent_clone_plan` (shell inventory + per-page-kind DNA), `ppt_agent_clone_build` (a JSON
+page plan → one shell per spec, dispatched to the page kits, audited) and
+`ppt_agent_clone_audit` (the six-kind page gate). A host agent now drives the
+byte-identical-template route without writing Python.
 
 The core architecture is model-agnostic and agent-host-agnostic. It is designed to support different
 LLMs, agent hosts, rendering engines and Office environments through explicit adapters.
