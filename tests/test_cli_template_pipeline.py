@@ -26,7 +26,7 @@ def test_analyze_pptx_writes_nested_slide_count(tmp_path: Path) -> None:
     payload = json.loads(dna.read_text(encoding="utf-8"))
     assert payload["presentation"]["slide_count"] == 1
     assert payload["slides"][0]["role"] == "first"
-    assert payload["schema"] == "template-dna/v0.3"
+    assert payload["schema"] == "template-dna/v0.4"
 
 
 def test_dna_to_ir_cli_preserves_master_and_shape_fidelity(tmp_path: Path) -> None:

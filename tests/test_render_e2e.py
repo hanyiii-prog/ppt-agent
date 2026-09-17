@@ -27,7 +27,7 @@ def test_pptx_dna_ir_render_round_trip(tmp_path: Path):
 
     dna = analyze_pptx(first)
     assert dna["presentation"]["slide_count"] == 2
-    assert dna["schema"] == "template-dna/v0.3"
+    assert dna["schema"] == "template-dna/v0.4"
 
     ir = template_dna_to_ir(dna, source="first.pptx")
     assert len(ir.slides) == 2

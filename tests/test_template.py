@@ -46,7 +46,7 @@ def sample_pptx(tmp_path: Path) -> Path:
 def test_template_dna_captures_semantics(sample_pptx: Path):
     dna = analyze_pptx(sample_pptx)
 
-    assert dna["schema"] == "template-dna/v0.3"
+    assert dna["schema"] == "template-dna/v0.4"
     assert dna["presentation"]["slide_count"] == 3
     assert dna["special_surfaces"]["first"]["role"] == "first"
     assert dna["special_surfaces"]["last"]["role"] == "last"
