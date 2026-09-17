@@ -394,6 +394,13 @@ def quad_cards(slide, cards, note=None, *, title="", lead=None, prs=None,
     """
     top = content_header(slide, title, lead, prs=prs) if top is None else top
     cw, chh = QUAD_CARD
+    if note:
+        # The reference grid and the note bar cannot both take full height:
+        # rows land at top and top+QUAD_PITCH_Y, so with a note present the
+        # card height compresses until the second row clears the bar
+        # (NOTE_Y - 0.30). Without a note the cards keep the exact
+        # reference geometry (QUAD_CARD 5.972x2.639).
+        chh = NOTE_Y - 0.30 - top - QUAD_PITCH_Y
     for i, c in enumerate(cards[:4]):
         x = M + (i % 2) * (cw + QUAD_GAP)
         y = top + (i // 2) * QUAD_PITCH_Y
