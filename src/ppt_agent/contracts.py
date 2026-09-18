@@ -21,6 +21,12 @@ MCP_PROTOCOL_VERSIONS: tuple[str, ...] = ("2025-06-18", "2024-11-05")
 # version "0.1" and remain readable; new output is stamped IR_SCHEMA_VERSION.
 SUPPORTED_IR_VERSIONS: tuple[str, ...] = ("0.1", IR_SCHEMA_VERSION)
 
+# Template DNA dialects this core can still consume. Decks extracted by V2.0
+# carry "template-dna/v0.4" and remain readable; the Design DNA layer
+# (ppt_agent.design_dna) stamps new output "template-dna/v1.0".
+TEMPLATE_DNA_SCHEMA_VERSION = "1.0"
+SUPPORTED_TEMPLATE_DNA_VERSIONS: tuple[str, ...] = ("0.4", TEMPLATE_DNA_SCHEMA_VERSION)
+
 
 class ContractError(ValueError):
     """Raised when an input violates a stable public contract."""
@@ -206,6 +212,36 @@ def is_ir_compatible(payload: Mapping[str, Any]) -> bool:
     return True
 
 
+# --- Template DNA version contract ----------------------------------------
+def template_dna_version_of(payload: Mapping[str, Any]) -> str:
+    """Read the template-dna version ("template-dna/v0.4" -> "0.4")."""
+    schema = payload.get("schema") if isinstance(payload, Mapping) else None
+    if not isinstance(schema, str) or not schema.startswith("template-dna/"):
+        return ""
+    return schema.split("/", 1)[1].lstrip("v")
+
+
+def check_template_dna_version(payload: Mapping[str, Any]) -> str:
+    """Return the template-dna version, raising ContractError when unsupported."""
+    version = template_dna_version_of(payload)
+    if not version:
+        raise ContractError("template DNA payload is missing a 'template-dna/…' schema stamp")
+    if version not in SUPPORTED_TEMPLATE_DNA_VERSIONS:
+        raise ContractError(
+            f"unsupported template-dna version {version!r}; "
+            f"supported: {', '.join(SUPPORTED_TEMPLATE_DNA_VERSIONS)}"
+        )
+    return version
+
+
+def is_template_dna_compatible(payload: Mapping[str, Any]) -> bool:
+    try:
+        check_template_dna_version(payload)
+    except ContractError:
+        return False
+    return True
+
+
 # --- Machine readable descriptor ------------------------------------------
 def contract_descriptor() -> dict[str, Any]:
     """Describe every stable version and capability. Served by the MCP tool surface."""
@@ -213,6 +249,8 @@ def contract_descriptor() -> dict[str, Any]:
         "core_api_version": CORE_API_VERSION,
         "ir_schema_version": IR_SCHEMA_VERSION,
         "supported_ir_versions": list(SUPPORTED_IR_VERSIONS),
+        "template_dna_schema_version": TEMPLATE_DNA_SCHEMA_VERSION,
+        "supported_template_dna_versions": list(SUPPORTED_TEMPLATE_DNA_VERSIONS),
         "adapter_protocol_version": ADAPTER_PROTOCOL_VERSION,
         "renderer_sdk_version": RENDERER_SDK_VERSION,
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
