@@ -172,6 +172,22 @@ Status legend: `[x]` shipped in code, `[~]` partial / v1 scope, `[ ]` not starte
       end-to-end loop (diff → repair → re-extract → structural gate → render → visual gate),
       355 tests green
 
+## V2.0.0 — Fidelity Engine GA (released, main)
+
+The V1.11 Fidelity Engine branch is promoted to the `2.0.0` GA line on `main`. This is a **major
+bump** because the fidelity surface is now a first-class, versioned contract (extraction schema
+`template-dna/fidelity/v2`, visual four-state status, critical-region gate) rather than an internal
+helper.
+
+- [x] Version promoted `1.11.0` → `2.0.0` across `pyproject.toml` and `ppt_agent.__version__`
+- [x] CI hardening: `python-tests` now installs `fonts-noto-cjk` (real CJK rendering) and surfaces
+      `FAILED`/`ERROR` lines as `::error::` annotations so a red run names the exact case
+- [x] Render-path bug fixed: `visual_regression.render_pptx` now coerces `str` paths to `Path`
+      (the LibreOffice branch used `pptx.stem`, which crashed only when a real renderer was present)
+- [x] `benchmark-and-mcp` job asserts `17` MCP tools end-to-end through the stdio handshake
+- [x] 355 tests green on Python 3.10 / 3.11 / 3.13; `dependency-free-core` import-and-capabilities
+      gate passes with no presentation engine installed
+
 ## Renderer v1 scope
 
 The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emits an editable `.pptx`:
@@ -185,7 +201,7 @@ The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emit
 Layout is resolved once in `ppt_agent.styling.resolve_layout()` and consumed by both the native and HTML
 engines, so a cross-engine comparison compares fidelity rather than two layout algorithms.
 
-The HTML engine (`src/ppt_agent/renderers/html.py`) emits one self-contained, printable deck: inline
+The HTML engine (`src/ppt_agent.renderers/html.py`) emits one self-contained, printable deck: inline
 styles, base64-inlined assets, escaped text, `@media print` page breaks.
 
 ## Design layer scope
