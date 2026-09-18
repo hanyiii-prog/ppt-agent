@@ -142,6 +142,7 @@ def _prepare_output_dir(output_dir: Path) -> None:
 
 def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144) -> list[Path]:
     """Render a PPTX to one PNG per slide; raises when no backend or on failure."""
+    pptx = Path(pptx)  # accept str paths: the libreoffice branch uses pptx.stem
     backend = preview_backend()
     if backend is None:
         raise VisualGateUnavailable(
