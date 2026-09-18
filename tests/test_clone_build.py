@@ -166,4 +166,45 @@ def test_tool_names_include_clone_tools():
     names = tool_names()
     assert {"ppt_agent_clone_plan", "ppt_agent_clone_build",
             "ppt_agent_clone_audit"} <= set(names)
-    assert len(names) == 18  # 13 base + 4 fidelity + 1 narrative (V2.1 batch 3)
+    assert len(names) == 19  # 13 base + 4 fidelity + narrative + generate (V2.1)
+
+
+def test_clone_tools_round_trip(tmp_path):
+    from ppt_agent.mcp.tools import call_tool
+
+    context = _context(tmp_path)
+    tpl = str(tmp_path / "tpl.pptx")
+    _write_template(tpl)
+
+    plan = call_tool("ppt_agent_clone_plan", {"template": tpl}, context)
+    payload = json.loads(plan["content"][0]["text"])
+    assert payload["shells"]["content"] == 4
+
+    built = call_tool(
+        "ppt_agent_clone_build",
+        {"template": tpl, "pages": _plan(), "output": "decks/out.pptx"},
+        context,
+    )
+    payload = json.loads(built["content"][0]["text"])
+    assert payload["audit"]["count"] == 0
+    assert (tmp_path / "decks" / "out.pptx").exists()
+
+    audited = call_tool("ppt_agent_clone_audit",
+                        {"pptx": str(tmp_path / "decks" / "out.pptx")}, context)
+    payload = json.loads(audited["content"][0]["text"])
+    assert payload["count"] == 0
+
+
+def _write_template(path):
+    """A template with the layout names the CJK role map expects + content DNA."""
+    prs = Presentation()
+    l0 = prs.slide_layouts[0]
+    l2 = prs.slide_layouts[2]
+    l5 = prs.slide_layouts[5]
+    l0.name = "标题幻灯片"
+    l2.name = "章节标题页"
+    l5.name = "内容页 - 有标题"
+    for _ in range(7):
+        prs.slides.add_slide(l0 if len(prs.slides._sldIdLst) < 2 else
+                            (l2 if len(prs.slides._sldIdLst) == 2 else l5))
+    prs.save(path)

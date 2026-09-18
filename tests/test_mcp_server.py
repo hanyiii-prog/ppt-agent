@@ -38,6 +38,7 @@ EXPECTED_TOOLS = {
     "ppt_agent_fidelity_repair",
     "ppt_agent_fidelity_validate",
     "ppt_agent_narrative_plan",
+    "ppt_agent_generate",
 }
 
 
