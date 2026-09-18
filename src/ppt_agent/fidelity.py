@@ -1122,8 +1122,29 @@ def extract_fidelity_dna(path: str | Path, slide_index: int = 1) -> dict[str, An
         master_rels_xml = zf.read(master_rels_path) if master_rels_path and master_rels_path in zf.namelist() else b""
         master_rels = _rel_map(master_rels_xml) if master_rels_xml else {}
 
-        theme_paths = [n for n in zf.namelist() if re.fullmatch(r"ppt/theme/theme\d+\.xml", n)]
-        theme_path = theme_paths[0] if theme_paths else None
+        # the slide's theme is the one its MASTER links to -- NOT "the first
+        # theme in the zip": decks may carry orphan themes (left by earlier
+        # masters), and re-saving a package reorders zip entries, which made a
+        # name-order pick resolve through the WRONG theme and report bogus
+        # style.gradient mismatches on perfectly intact chrome. Found during
+        # the first real-template sample validation (hospital deck, 5 themes).
+        theme_target = master_rels.get(
+            next((k for k, v in master_rels.items() if v and "theme" in v), "")
+        ) if master_rels else None
+        theme_path = (
+            _zip_path(posixpath.dirname(master_path), theme_target)
+            if master_path and theme_target
+            else None
+        )
+        if not theme_path or theme_path not in zf.namelist():
+            theme_path = next(
+                (
+                    n
+                    for n in sorted(zf.namelist())
+                    if re.fullmatch(r"ppt/theme/theme\d+\.xml", n)
+                ),
+                None,
+            )
         theme_xml = zf.read(theme_path) if theme_path else None
         theme_parsed = _parse_theme(theme_xml)
         theme_ctx: dict[str, Any] = {
