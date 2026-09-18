@@ -23,10 +23,14 @@ class ToolError(RuntimeError):
 
 @dataclass
 class ToolContext:
-    """Execution context: one SDK instance plus the sandbox it may write to."""
+    """Execution context: one SDK instance, the sandbox, and the sampling session."""
 
     agent: PptAgent
     workspace: Path
+    # ppt_agent.mcp.sampling.SamplingSession | None -- typed loosely so the
+    # tools module stays importable without the sampling transport. Tools that
+    # want the host model go through llm.select_provider(self.session).
+    session: Any = None
 
     def output_path(self, value: str) -> Path:
         """Resolve an output path, refusing to escape the workspace root."""
@@ -46,7 +50,7 @@ class ToolContext:
         return target
 
 
-# --- argument helpers -----------------------------------------------------
+# --- argument helpers ------------------------------------------------------
 def _require(arguments: dict[str, Any], key: str) -> Any:
     if key not in arguments or arguments[key] in (None, ""):
         raise ToolError(f"missing required argument: {key}")
@@ -370,6 +374,23 @@ def tool_fidelity_validate(arguments: dict[str, Any], context: ToolContext) -> d
     return result
 
 
+def tool_narrative_plan(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..llm.provider import llm_fn_from_provider, select_provider
+    from ..narrative_engine import build_narrative
+    from ..parsers import parse_markdown
+
+    text = _read_text(arguments, context, source_key="source", inline_key="markdown")
+    document = parse_markdown(text)
+    provider = select_provider(context.session)
+    if provider is None:
+        # red line 6: no sampling capability -> the LLM was never attempted
+        narrative = build_narrative(document)
+    else:
+        narrative = build_narrative(document, llm_fn=llm_fn_from_provider(provider))
+    narrative["source"] = "mcp"
+    return narrative
+
+
 TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str, Any]]] = {
     "ppt_agent_capabilities": tool_capabilities,
     "ppt_agent_analyze_pptx": tool_analyze_pptx,
@@ -388,6 +409,7 @@ TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str
     "ppt_agent_fidelity_diff": tool_fidelity_diff,
     "ppt_agent_fidelity_repair": tool_fidelity_repair,
     "ppt_agent_fidelity_validate": tool_fidelity_validate,
+    "ppt_agent_narrative_plan": tool_narrative_plan,
 }
 
 
@@ -686,6 +708,22 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "output": {"type": "string", "description": "Optional path for the report JSON"},
             },
             ["reference", "candidate"],
+        ),
+    },
+    {
+        "name": "ppt_agent_narrative_plan",
+        "description": (
+            "Narrative planning over Markdown content. When the host declared MCP "
+            "sampling support the section arc is planned by the host model "
+            "(metadata.llm = sampled); otherwise the deterministic rules engine "
+            "runs (llm = off), and if sampling fails the rules engine takes over "
+            "with llm = fallback. Degradation is never silent."
+        ),
+        "inputSchema": _schema(
+            {
+                "markdown": {"type": "string", "description": "Inline Markdown content"},
+                "source": {"type": "string", "description": "Path to a Markdown file"},
+            },
         ),
     },
 ]
