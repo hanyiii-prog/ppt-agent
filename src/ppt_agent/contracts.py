@@ -27,6 +27,12 @@ SUPPORTED_IR_VERSIONS: tuple[str, ...] = ("0.1", IR_SCHEMA_VERSION)
 TEMPLATE_DNA_SCHEMA_VERSION = "1.0"
 SUPPORTED_TEMPLATE_DNA_VERSIONS: tuple[str, ...] = ("0.4", TEMPLATE_DNA_SCHEMA_VERSION)
 
+# Content IR dialects this core can still consume. The understanding layer
+# (parsers / content_analyzer / page_count / presentation_plan / narrative_engine)
+# speaks "content-ir/v0.1".
+CONTENT_IR_SCHEMA_VERSION = "0.1"
+SUPPORTED_CONTENT_IR_VERSIONS: tuple[str, ...] = (CONTENT_IR_SCHEMA_VERSION,)
+
 
 class ContractError(ValueError):
     """Raised when an input violates a stable public contract."""
@@ -242,6 +248,36 @@ def is_template_dna_compatible(payload: Mapping[str, Any]) -> bool:
     return True
 
 
+# --- Content IR version contract ------------------------------------------
+def content_ir_version_of(payload: Mapping[str, Any]) -> str:
+    """Read the content-ir version ("content-ir/v0.1" -> "0.1")."""
+    schema = payload.get("schema") if isinstance(payload, Mapping) else None
+    if not isinstance(schema, str) or not schema.startswith("content-ir/"):
+        return ""
+    return schema.split("/", 1)[1].lstrip("v")
+
+
+def check_content_ir_version(payload: Mapping[str, Any]) -> str:
+    """Return the content-ir version, raising ContractError when unsupported."""
+    version = content_ir_version_of(payload)
+    if not version:
+        raise ContractError("content IR payload is missing a 'content-ir/…' schema stamp")
+    if version not in SUPPORTED_CONTENT_IR_VERSIONS:
+        raise ContractError(
+            f"unsupported content-ir version {version!r}; "
+            f"supported: {', '.join(SUPPORTED_CONTENT_IR_VERSIONS)}"
+        )
+    return version
+
+
+def is_content_ir_compatible(payload: Mapping[str, Any]) -> bool:
+    try:
+        check_content_ir_version(payload)
+    except ContractError:
+        return False
+    return True
+
+
 # --- Machine readable descriptor ------------------------------------------
 def contract_descriptor() -> dict[str, Any]:
     """Describe every stable version and capability. Served by the MCP tool surface."""
@@ -251,6 +287,8 @@ def contract_descriptor() -> dict[str, Any]:
         "supported_ir_versions": list(SUPPORTED_IR_VERSIONS),
         "template_dna_schema_version": TEMPLATE_DNA_SCHEMA_VERSION,
         "supported_template_dna_versions": list(SUPPORTED_TEMPLATE_DNA_VERSIONS),
+        "content_ir_schema_version": CONTENT_IR_SCHEMA_VERSION,
+        "supported_content_ir_versions": list(SUPPORTED_CONTENT_IR_VERSIONS),
         "adapter_protocol_version": ADAPTER_PROTOCOL_VERSION,
         "renderer_sdk_version": RENDERER_SDK_VERSION,
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
