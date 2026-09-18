@@ -86,6 +86,6 @@ jobs:
           assert serve(stdin, stdout, workspace="dist") == 0
           responses = [json.loads(line) for line in stdout.getvalue().splitlines() if line.strip()]
           assert responses[0]["result"]["serverInfo"]["name"] == "ppt-agent", responses[0]
-          assert len(responses[1]["result"]["tools"]) == 17, responses[1]
+          assert len(responses[1]["result"]["tools"]) == 19, responses[1]
           print("MCP handshake OK")
           PY
