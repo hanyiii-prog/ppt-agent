@@ -136,6 +136,58 @@ Status legend: `[x]` shipped in code, `[~]` partial / v1 scope, `[ ]` not starte
 - [x] `quad_cards` note fix: with a note bar the card rows compress to clear it; without one the
       exact reference geometry is kept (the note used to overlap the second row by ~0.6in)
 
+## V1.11 — Fidelity Engine closed loop (branch `v1.11-fidelity-engine`)
+- [x] `ppt_agent.fidelity_model`: canonical `DeckFidelity` / `SlideFidelity` / `ElementFidelity`
+      model — every element knows its source (master/layout/slide), global render order, resolved
+      style and raw OOXML evidence
+- [x] Extractor hardening (`fidelity.py` → `template-dna/fidelity/v2`): per-kind `cNvPr` identity,
+      rotation/flip/**group-transform-mapped rendered bboxes**, theme colour resolution
+      (schemeClr → RGB), structured fill/gradient/typography/bodyPr/custGeom/connector/table,
+      placeholder inheritance chains (declared/inherited/resolved/source), page-kind
+      classification and a **TOC structure fingerprint**
+- [x] `ppt_agent.fidelity_match`: seven-priority identity matching (semantic identity /
+      placeholder / name / media hash / role / geometry proximity / index fallback) — reorders and
+      insertions no longer cascade into false property diffs
+- [x] Structural Diff 2.0 (`fidelity_diff.py`): eight-group diff codes (page/layer/geometry/style/
+      text/media/inheritance/structure), namespace- and attribute-order-insensitive **semantic XML
+      hashes**, media compared by content hash, assets compared order-independently
+- [x] `ppt_agent.fidelity_repair_executor`: zip-level **minimal property repair** addressed by
+      `cNvPr` id (one `x` for a position, one `<a:alpha>` for transparency), per-container
+      layer-order rebuild, verify-by-re-extraction; non-minimal directives (added layers, media
+      swaps, page kinds) are reported `skipped`, never faked
+- [x] Visual Diff 2.0 (`visual_regression.py`): explicit
+      `renderer_unavailable` / `renderer_error` / `visual_pass` / `visual_fail` states, Edge Diff,
+      8-region diff (background/header/title/body/footer/image/decoration/chrome),
+      `page_score` / `critical_region_score` and the **Critical Region Gate** (a lost logo can no
+      longer hide behind a high whole-page SSIM)
+- [x] Iterative repair (`fidelity_pipeline.py`): `repair_deck` with `max_iterations` (default 3),
+      full `repair_history`, `A→B→A` / stalled-repair **oscillation detection** and
+      `FidelityRepairExhausted` carrying the remaining issues
+- [x] Clone route integration (`clone_build.py`): `chrome_fidelity_gate` proves every finished
+      page still inherits the template's layout/master layers verbatim and TOC fingerprints
+      survive the chain
+- [x] CLI `ppt-agent fidelity extract|diff|audit|repair|validate`; MCP tools
+      `ppt_agent_fidelity_extract` / `diff` / `repair` / `validate` (17 tools total)
+- [x] Real-PPTX regression suite: 13 single-property mutation fixtures + 5 TOC fixtures + the
+      end-to-end loop (diff → repair → re-extract → structural gate → render → visual gate),
+      355 tests green
+
+## V2.0.0 — Fidelity Engine GA (released, main)
+
+The V1.11 Fidelity Engine branch is promoted to the `2.0.0` GA line on `main`. This is a **major
+bump** because the fidelity surface is now a first-class, versioned contract (extraction schema
+`template-dna/fidelity/v2`, visual four-state status, critical-region gate) rather than an internal
+helper.
+
+- [x] Version promoted `1.11.0` → `2.0.0` across `pyproject.toml` and `ppt_agent.__version__`
+- [x] CI hardening: `python-tests` now installs `fonts-noto-cjk` (real CJK rendering) and surfaces
+      `FAILED`/`ERROR` lines as `::error::` annotations so a red run names the exact case
+- [x] Render-path bug fixed: `visual_regression.render_pptx` now coerces `str` paths to `Path`
+      (the LibreOffice branch used `pptx.stem`, which crashed only when a real renderer was present)
+- [x] `benchmark-and-mcp` job asserts `17` MCP tools end-to-end through the stdio handshake
+- [x] 355 tests green on Python 3.10 / 3.11 / 3.13; `dependency-free-core` import-and-capabilities
+      gate passes with no presentation engine installed
+
 ## Renderer v1 scope
 
 The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emits an editable `.pptx`:
@@ -149,7 +201,7 @@ The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emit
 Layout is resolved once in `ppt_agent.styling.resolve_layout()` and consumed by both the native and HTML
 engines, so a cross-engine comparison compares fidelity rather than two layout algorithms.
 
-The HTML engine (`src/ppt_agent/renderers/html.py`) emits one self-contained, printable deck: inline
+The HTML engine (`src/ppt_agent.renderers/html.py`) emits one self-contained, printable deck: inline
 styles, base64-inlined assets, escaped text, `@media print` page breaks.
 
 ## Design layer scope

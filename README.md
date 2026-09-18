@@ -15,13 +15,26 @@
 - **中文文档：** 当前 README
 - **English:** see the English sections below
 
-## 当前版本：V1.10
+## 当前版本：V2.0.0（Fidelity Engine GA，main 分支）
 
-V1.10 把**克隆壳路线搬上了 MCP 工具面**——从此一个 server 就是全部入口：`ppt_agent_clone_plan`（模板壳位与按页型 DNA 体检）→ `ppt_agent_clone_build`（JSON 页面计划 → 分壳注入 → 审计，kit 参数即 `page_kits` 签名）→ `ppt_agent_clone_audit`（六类页面门禁）。宿主 Agent 不写一行 Python 就能驱动"装饰字节级继承"的高保真路线；顺带修掉 `quad_cards` 注脚条与第二行卡片重叠的几何冲突（有注脚时网格自动压缩，无注脚保持参考几何）。
+V1.11 建成 **Fidelity Engine 高保真闭环**——不再满足于“结构相似”，而是完整走通 `OOXML 证据 → Canonical Fidelity Model → 元素匹配 → 结构 Diff 2.0 → 属性级修复 → 渲染 → 区域视觉 Diff → 迭代修复 → 回归门禁`：
 
-V1.9 补上了**目录页与占位符治理**：`toc_page` 套件按参考版几何 1:1 复刻目录页（含近乎透明的装饰大圆）；空占位符被正式判定为"死模板 DNA"——`drop_empty_placeholders()` 删除它，`audit_pages` 的 `stale_placeholder` 检查拦住它。空占位符并不惰性：渲染器会把它回退到版式孪生占位符，于是版式里的骨架文本（`单击此处编辑母版标题样式`）被画到页面顶部。
+- **Canonical Fidelity Model**（`fidelity_model.py`）：DeckFidelity / SlideFidelity / ElementFidelity 统一数据模型，每个元素知道自己的来源（master / layout / slide）、全局渲染序、解析后的样式和 OOXML 证据。
+- **提取器加固**（`fidelity.py` → `template-dna/fidelity/v2`）：五类元素各自的 `cNvPr` 身份、rotation/flip/**组变换映射后的真实外框**、主题色解析（schemeClr → RGB）、结构化 fill/gradient/typography/bodyPr/custGeom/connector/table、占位符继承链（declared / inherited / resolved / source）、页面类型分类与 **TOC 结构指纹**。
+- **元素匹配引擎**（`fidelity_match.py`）：七级身份优先级（语义身份 / 占位符 / 名称 / 媒体哈希 / 语义角色 / 几何接近 / 索引兜底），彻底消除索引级联误报。
+- **Structural Diff 2.0**（`fidelity_diff.py`）：八类细粒度 code 分类（page/layer/geometry/style/text/media/inheritance/structure）、语义 XML 规范化哈希（命名空间与属性序不敏感）、媒体按内容哈希比较。
+- **Repair Executor**（`fidelity_repair_executor.py`）：zip 级 OOXML **最小属性修复**——位置只写一个 `x`、alpha 只写一个 `<a:alpha>`、按 `cNvPr` id 寻址、修复后重提取重 diff 验证；不可最小修复的指令（新增层 / 换图 / page kind）显式 skipped。
+- **Visual Diff 2.0**（`visual_regression.py`）：`renderer_unavailable / renderer_error / visual_pass / visual_fail` 四态永不混淆；Edge Diff + 8 类区域 Diff（background/header/title/body/footer/image/decoration/chrome）+ `page_score` / `critical_region_score` + **Critical Region Gate**（Logo 消失不能再靠整页 SSIM 蒙混）。
+- **迭代修复**（`fidelity_pipeline.py`）：`repair_deck` 最多 3 轮（结构 Diff → 修复 → 重提取 → 重 Diff → 渲染 → 视觉 Diff），`repair_history` 全程留痕，`A→B→A` 振荡与无效修复自动停止并报告 `repair_oscillation`，耗尽后抛 `FidelityRepairExhausted` 并携带剩余问题。
+- **克隆路线集成**（`clone_build.py`）：`chrome_fidelity_gate` 验证成品每页的**继承层与模板逐属性一致**（原生 chrome 只继承不重画）、TOC 指纹在链路末端仍在。
+- **CLI + MCP**：`ppt-agent fidelity extract/diff/audit/repair/validate`；MCP 单入口新增 `ppt_agent_fidelity_extract / diff / repair / validate`（17 工具）。
+- **真实 PPTX 回归**：355 项测试全部基于 python-pptx 实际构建的 package（13 类单属性突变矩阵 + 5 类 TOC fixture + 端到端闭环），CI 全绿后才可交付。
 
-V1.8 把 Template DNA 升级为**按页型逐层提取**（`template-dna/v0.4`，`page_dna.py`）：封面 / 目录 / 章节 / 内容 / 封底五类页各自一份完整图层栈（母版 → 版式 → 幻灯片统一绘制顺序），并覆盖旋转/翻转与旋转后真实外框、渐变**逐停靠 alpha**、run 级颜色 alpha、图片 `alphaModFix` 与媒体指纹。正是这次升级把"封底丢底图满屏实心蓝、目录装饰圆不透明盖住章节文字、章节横幅被画成竖条"三处缺陷一次抓了出来。
+V1.10 把**克隆壳路线搬上了 MCP 工具面**——从此一个 server 就是全部入口：`ppt_agent_clone_plan`（模板壳位与按页型 DNA 体检）→ `ppt_agent_clone_build`（JSON 页面计划 → 分壳注入 → 审计，kit 参数即 `page_kits` 签名）→ `ppt_agent_clone_audit`（六类页面门禁）。宿主 Agent 不写一行 Python 就能驱动“装饰字节级继承”的高保真路线；顺带修掉 `quad_cards` 注脚条与第二行卡片重叠的几何冲突（有注脚时网格自动压缩，无注脚保持参考几何）。
+
+V1.9 补上了**目录页与占位符治理**：`toc_page` 套件按参考版几何 1:1 复刻目录页（含近乎透明的装饰大圆）；空占位符被正式判定为“死模板 DNA”——`drop_empty_placeholders()` 删除它，`audit_pages` 的 `stale_placeholder` 检查拦住它。空占位符并不惰性：渲染器会把它回退到版式孪生占位符，于是版式里的骨架文本（`单击此处编辑母版标题样式`）被画到页面顶部。
+
+V1.8 把 Template DNA 升级为**按页型逐层提取**（`template-dna/v0.4`，`page_dna.py`）：封面 / 目录 / 章节 / 内容 / 封底五类页各自一份完整图层栈（母版 → 版式 → 幻灯片统一绘制顺序），并覆盖旋转/翻转与旋转后真实外框、渐变**逐停靠 alpha**、run 级颜色 alpha、图片 `alphaModFix` 与媒体指纹。正是这次升级把“封底丢底图满屏实心蓝、目录装饰圆不透明盖住章节文字、章节横幅被画成竖条”三处缺陷一次抓了出来。
 
 V1.7 让**旋转与翻转成为一等公民**（`set_xfrm` / `rotated_bbox` / `clone_shape`），并确立克隆壳路线的铁律：版式已经绘制的装饰**继承而非重画**——`layout_chrome()` 探测版式装饰，`audit_pages` 的 `doubling` 检查拦截重画。
 
@@ -33,7 +46,7 @@ V1.2 补上了**模板闭环**：`build --template 你的模板.pptx` 会从参�
 
 V1.1 在 V1.0 的稳定平台之上补上了**渲染质量**这一层。
 
-V1.0 打的是地基（契约 / SDK / MCP / Benchmark / 发布），渲染器只保证"管线跑得通"，产出的是裸文本框堆叠；V1.1 引入真正的设计层，让一份 Markdown 大纲直接变成可以拿去讲的 PPT。
+V1.0 打的是地基（契约 / SDK / MCP / Benchmark / 发布），渲染器只保证“管线跑得通”，产出的是裸文本框堆叠；V1.1 引入真正的设计层，让一份 Markdown 大纲直接变成可以拿去讲的 PPT。
 
 ```text
 V1.0 稳定契约（IR / Adapter / Renderer / Benchmark / Release 五个版本号）
@@ -50,7 +63,7 @@ V1.0 可复现发布流程（哈希清单 + 漂移校验）
         +
 V1.1 设计层（主题令牌 + 版式合成器，在 IR 层产出带几何与样式的图元）
         +
-V1.1 可视化闭环（PPTX → PNG 光栅预览，门禁由"结构检查"升级为"渲染检查"）
+V1.1 可视化闭环（PPTX → PNG 光栅预览，门禁由“结构检查”升级为“渲染检查”）
         +
 V1.2 模板闭环（Template DNA → 主题令牌，产物继承参考 PPT 的配色与字体）
         +
@@ -65,6 +78,8 @@ V1.8 按页型逐层 Template DNA（template-dna/v0.4，page_dna）
 V1.9 空占位符治理（drop_empty_placeholders / stale_placeholder 审计）
         +
 V1.10 克隆壳上 MCP 工具面（clone_plan / clone_build / clone_audit，单入口 13 工具）
+        +
+V1.11 Fidelity Engine 高保真闭环（Canonical Model / 匹配 / Diff 2.0 / 属性级修复 / 渲染与区域 Diff / 迭代修复 / 17 工具）
 ```
 
 ## 项目定位
@@ -181,13 +196,13 @@ Generate → Render → Critic → 发现问题 → Repair → Rebuild → Rende
 ppt-agent-mcp --workspace /path/to/sandbox
 ```
 
-13 个工具，覆盖能力查询、模板分析、Markdown→IR、IR→PPTX、IR→HTML、IR 质检、PPTX 门禁、事实审计、端到端构建、主机能力画像，以及**克隆壳三件套**（`clone_plan` / `clone_build` / `clone_audit`，见第 12 节——模板高保真复刻从此不需要写 Python）。传输层是纯标准库实现的换行分隔 JSON-RPC 2.0 —— 引入官方 MCP SDK 会给一个以“核心可移植”为前提的项目增加运行时依赖，而工具宿主真正需要的协议面很小且稳定。
+17 个工具，覆盖能力查询、模板分析、Markdown→IR、IR→PPTX、IR→HTML、IR 质检、PPTX 门禁、事实审计、端到端构建、主机能力画像、**克隆壳三件套**（`clone_plan` / `clone_build` / `clone_audit`，见第 12 节——模板高保真复刻从此不需要写 Python），以及 **Fidelity Engine 四件套**（`fidelity_extract` / `diff` / `repair` / `validate`，见第 14 节——结构 + 渲染双门禁的高保真闭环）。传输层是纯标准库实现的换行分隔 JSON-RPC 2.0 —— 引入官方 MCP SDK 会给一个以“核心可移植”为前提的项目增加运行时依赖，而工具宿主真正需要的协议面很小且稳定。
 
 详见 [`docs/mcp.md`](docs/mcp.md)。
 
 ### 12. 模板克隆壳路线：装饰继承而非重画
 
-设计层路线（`build`）从零绘制页面，适合"白纸起稿"；但当你手里已经有一份模板 PPT，更保真的做法是**克隆壳**：把整份模板复制为可写副本，按版式名把它的幻灯片分类成壳（封面 / 章节 / 内容 / 封底），逐页清屏注入内容，最后剪枝重排——未触碰的照片、LOGO、自由曲线、渐变与模板**字节级一致**，不存在"重新渲染的近似"。
+设计层路线（`build`）从零绘制页面，适合“白纸起稿”；但当你手里已经有一份模板 PPT，更保真的做法是**克隆壳**：把整份模板复制为可写副本，按版式名把它的幻灯片分类成壳（封面 / 章节 / 内容 / 封底），逐页清屏注入内容，最后剪枝重排——未触碰的照片、LOGO、自由曲线、渐变与模板**字节级一致**，不存在“重新渲染的近似”。
 
 ```python
 from ppt_agent.clone_shell import CloneShell, audit_pages, rebuild_cover
@@ -207,7 +222,7 @@ issues = audit_pages(deck.prs)              # 溢出 / 碰撞 / 空页 / 重复 
 | `set_xfrm(rot=90, flip_h=True)` | python-pptx 的 `left/top/width/height` **不携带 rot/flip**，照框号重画会把模板里横置的章节横幅画成竖条 |
 | `rotated_bbox(shape)` | 布局计算（越界 / 重叠 / 遮挡）必须用旋转后的真实外框，而不是未旋转的框 |
 | `clone_shape(src, dst)` | 复用模板装饰的正解是整份深拷 XML（连 rot 与自定义几何一起搬），而不是重画 |
-| `gradient_fill((pos, hex, alpha_pct))` | 模板顶栏实为 `#1185FE @15% → @0%` 的透明渐隐条；画成实心蓝条就是"控件比参考版差"的根源 |
+| `gradient_fill((pos, hex, alpha_pct))` | 模板顶栏实为 `#1185FE @15% → @0%` 的透明渐隐条；画成实心蓝条就是“控件比参考版差”的根源 |
 | `layout_chrome(slide)` | 探测版式已提供的装饰；`add_content_chrome` 据此**继承不重画**（重画 = LOGO 叠两层 + 透明条被实心条盖住） |
 | `drop_empty_placeholders` | 空占位符不是惰性的——渲染器会回退到版式孪生占位符，把骨架文本画出来 |
 
@@ -215,14 +230,37 @@ issues = audit_pages(deck.prs)              # 溢出 / 碰撞 / 空页 / 重复 
 
 ### 13. 按页型的 Template DNA v0.4
 
-`page_dna.extract_deck_dna()` 把 DNA 提取从"每页一张扁平形状表"升级为**按页型逐层提取**（`template-dna/v0.4`）：
+`page_dna.extract_deck_dna()` 把 DNA 提取从“每页一张扁平形状表”升级为**按页型逐层提取**（`template-dna/v0.4`）：
 
 - **页型**：`cover / toc / section / content / closing` 五类，判定优先级 = 页位 → 标题文本（目录页常复用内容页版式，所以 `目录` 先于版式名）→ 版式名 → 结构信号（旋转横幅 + 极少形状 = 章节页）。
-- **图层栈**：每页输出母版 → 版式 → 幻灯片的**完整渲染栈**与全局绘制顺序——"谁盖住谁"第一次可直接回答。
+- **图层栈**：每页输出母版 → 版式 → 幻灯片的**完整渲染栈**与全局绘制顺序——“谁盖住谁”第一次可直接回答。
 - **全属性**：预设几何 + adj 调整值（或 custGeom 路径统计）、旋转/翻转 + 旋转后真实外框、渐变**逐停靠** alpha、run 级字体与颜色 alpha、图片 `alphaModFix`/裁剪/媒体指纹、线型/箭头/连接、效果。
 - **页型级 ornaments**：该类页**每页都有**的形状集合即真 chrome——克隆时应当继承而非重画的那份清单。
 
 v0.3 的全部键（`slides` / `special_surfaces` / `masters` / `theme` / 统计）仍照常输出，老消费者无需改动；`analyze_pptx` 是它的薄包装。
+
+### 14. Fidelity Engine：从“结构相似”到“高保真闭环”（V1.11）
+
+Fidelity Engine 把“成品像不像参考”变成可验证的闭环：`OOXML 证据 → Canonical Fidelity Model → 元素匹配 → 结构 Diff 2.0 → 属性级修复 → 渲染 → 区域视觉 Diff → 迭代修复 → 回归门禁`。
+
+```bash
+# 提取一页的硬化 OOXML 指纹（page kind / 全局渲染序 / 继承链 / TOC 指纹）
+ppt-agent fidelity extract ref.pptx --slide 2 -o dna.json
+
+# 单页结构 diff（八类细粒度 code + 语义 XML 哈希）
+ppt-agent fidelity diff ref.pptx cand.pptx --slide 3 -o diff.json
+
+# 整册结构门禁（逐页 PASS/FAIL + 修复指令）
+ppt-agent fidelity audit ref.pptx cand.pptx -o gate.json
+
+# 迭代修复：diff → 属性级修复 → 重提取 → 重 diff → 渲染 → 视觉门禁
+ppt-agent fidelity repair ref.pptx cand.pptx -o repaired.pptx --render
+
+# 结构 + 渲染双门禁验证
+ppt-agent fidelity validate ref.pptx repaired.pptx --workspace dist/fidelity
+```
+
+核心保证：**渲染器不可用/报错永远不是 visual pass**；`A→B→A` 振荡修复自动停止并报告；不可最小修复的差异（新增层 / 换图 / page kind）显式 skipped，绝不假装修复。
 
 ## 整体架构
 
@@ -286,31 +324,40 @@ ppt-agent/
 │   ├── story.py           # Story Architect（叙事大纲 → IR）
 │   ├── template.py        # PPTX → Template DNA（analyze_pptx 委托 page_dna）
 │   ├── page_dna.py        # 按页型逐层 Template DNA（template-dna/v0.4）：图层栈 / 旋转 / 逐停靠 alpha
+│   ├── fidelity.py        # Fidelity Engine：硬化 OOXML 提取器（template-dna/fidelity/v2）
+│   ├── fidelity_model.py  # Canonical Fidelity Model：Deck / Slide / Element 三级统一模型
+│   ├── fidelity_match.py  # 元素匹配引擎：七级身份优先级，消除索引级联误报
+│   ├── fidelity_diff.py   # Structural Diff 2.0：八类 code 分类 + 语义 XML 哈希
+│   ├── fidelity_gate.py   # 整册结构门禁（逐页 + 修复指令）
+│   ├── fidelity_repair.py # 修复指令规划（RepairDirective / Repair Plan）
+│   ├── fidelity_repair_executor.py  # zip 级最小属性修复 + 层序重建 + 重提取验证
+│   ├── fidelity_pipeline.py         # 迭代修复闭环（振荡检测 / FidelityRepairExhausted）
+│   ├── fidelity_score.py  # 包级保真度评分
 │   ├── palette.py         # 面积加权调色板（schemeClr 经主题解析，区域加权）
 │   ├── clone_shell.py     # 模板克隆壳：分壳清屏注入剪枝重排 + 旋转感知原语 + 页面审计
-│   ├── clone_build.py     # 克隆壳的数据驱动入口：JSON 页面计划 → 分壳 → page_kits 分派 → 审计
+│   ├── clone_build.py     # 克隆壳的数据驱动入口 + chrome fidelity gate
 │   ├── page_kits.py       # 可复用页面套件：目录 / 章节 / 职责卡 / 组织架构 / 时间轴等
 │   ├── dna_to_ir.py       # Template DNA → IR
 │   ├── renderer.py        # 原生可编辑 PPTX（底层实现）
 │   ├── renderers/         # 渲染器 SDK：协议 / 注册表 / native / html
 │   ├── adapters/          # 适配器 SDK：协议 / 能力检测 / 主机画像
-│   ├── mcp/               # MCP stdio server：协议 / 工具 / 服务
+│   ├── mcp/               # MCP stdio server：协议 / 工具（17）/ 服务
 │   ├── sdk.py             # 统一门面 PptAgent（CLI / MCP / 集成共用）
 │   ├── page_validation.py # 几何 / 空白页门禁（渲染版 + 结构版）
 │   ├── visual_critic.py   # 视觉评审规则
-│   ├── visual_regression.py # 渲染 + SSIM/MAE 对比 + 栅格器探测
+│   ├── visual_regression.py # 渲染 + 四态状态机 + 区域 Diff + 关键区域门禁
 │   ├── preview.py         # PPTX → 逐页 PNG 光栅预览（Pillow 兜底后端）
 │   ├── fact_registry.py   # 事实登记与溯源校验
 │   ├── delivery.py        # 交付门禁 + 有界修复循环
 │   ├── benchmark.py       # 可复现 Benchmark 套件
 │   ├── release.py         # 发布清单与漂移校验
-│   └── cli.py             # 命令行入口
+│   └── cli.py             # 命令行入口（含 fidelity 五个子命令）
 ├── benchmarks/        # Benchmark 用例与说明
 ├── ir/                # Universal Presentation IR JSON Schema
 ├── schemas/           # 能力描述 / 交付清单 Schema
 ├── scripts/           # 发布脚本
 ├── skills/            # 可移植 Skill
-├── tests/             # 自动化测试（247 项）
+├── tests/             # 自动化测试（355 项）
 ├── docs/              # 技术文档
 └── .github/           # GitHub Actions / Issue / PR 配置
 ```
@@ -354,6 +401,12 @@ ppt-agent validate-pptx deck.pptx -o qa.json
 # 事实审计（未登记的说法会让构建失败）
 ppt-agent audit-facts ir.json --facts facts.json
 
+# Fidelity Engine：提取 / 对比 / 门禁 / 修复 / 验证
+ppt-agent fidelity extract ref.pptx -o dna.json
+ppt-agent fidelity audit ref.pptx cand.pptx -o gate.json
+ppt-agent fidelity repair ref.pptx cand.pptx -o repaired.pptx --render
+ppt-agent fidelity validate ref.pptx repaired.pptx --workspace dist/fidelity
+
 # 可复现 Benchmark
 ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 
@@ -361,7 +414,7 @@ ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 ppt-agent-mcp --workspace ./sandbox
 ```
 
-新增命令一览：`build`、`capabilities`、`audit-facts`、`benchmark`、`preview`、`mcp`、`ir-to-html`、`release-manifest`、`release-verify`。 `build` 另有 `--template`（模板驱动主题）与 `--preview`（逐页 PNG）两个开关。
+新增命令一览：`build`、`capabilities`、`audit-facts`、`benchmark`、`preview`、`mcp`、`ir-to-html`、`release-manifest`、`release-verify`、`fidelity extract/diff/audit/repair/validate`。 `build` 另有 `--template`（模板驱动主题）与 `--preview`（逐页 PNG）两个开关。
 
 > 语义幻灯片会先经 `design.py` 合成版式（主题驱动），再交给渲染器；已带绝对几何的 IR 直接透传。
 > 给了 `--template` 时，主题令牌改由模板 DNA 推导（配色 / 字体 / 字号阶梯），内置预设不再参与。
@@ -418,7 +471,7 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 |---|---|
 | [`ROADMAP.md`](ROADMAP.md) | 版本进度、渲染器范围、已知限制、契约兼容策略 |
 | [`docs/architecture.md`](docs/architecture.md) | 分层、模块职责、渲染契约、能力降级矩阵 |
-| [`docs/mcp.md`](docs/mcp.md) | MCP server 协议面、13 个工具、克隆壳三件套、workspace 边界 |
+| [`docs/mcp.md`](docs/mcp.md) | MCP server 协议面、工具清单、克隆壳三件套、workspace 边界 |
 | [`docs/adapters.md`](docs/adapters.md) | 能力模型、声明 vs 实际、协商、主机画像 |
 | [`docs/release.md`](docs/release.md) | 发布清单、漂移校验、契约版本变更流程 |
 | [`docs/production-quality-loop.md`](docs/production-quality-loop.md) | 生产质量循环 |
@@ -427,7 +480,7 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 ## 测试
 
 ```bash
-pytest -q                      # 247 项
+pytest -q                      # 355 项
 ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 python scripts/release.py build && python scripts/release.py verify
 ```
@@ -464,6 +517,13 @@ V1.10 puts the clone route on the MCP tool surface, so one server is the whole e
 page plan → one shell per spec, dispatched to the page kits, audited) and
 `ppt_agent_clone_audit` (the six-kind page gate). A host agent now drives the
 byte-identical-template route without writing Python.
+
+V2.0.0 (Fidelity Engine GA, formerly `v1.11-fidelity-engine`) builds the **Fidelity Engine closed loop** — matching
+based element pairing, fine-grained diff codes, semantic XML hashing, minimal property-level
+OOXML repair, renderer-status-aware visual comparison with region and critical-region gates,
+an iterative repair loop with oscillation detection, and a chrome fidelity gate for the clone
+route. CLI: `ppt-agent fidelity extract|diff|audit|repair|validate`; MCP: four `fidelity_*`
+tools (17 total).
 
 The core architecture is model-agnostic and agent-host-agnostic. It is designed to support different
 LLMs, agent hosts, rendering engines and Office environments through explicit adapters.

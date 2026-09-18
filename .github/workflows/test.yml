@@ -22,11 +22,21 @@ jobs:
       - name: Install system render dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreoffice-impress poppler-utils
+          sudo apt-get install -y libreoffice-impress poppler-utils fonts-noto-cjk
       - name: Install package and QA dependencies
         run: python -m pip install -e ".[pptx,qa,test]"
       - name: Run tests
-        run: pytest -q
+        run: |
+          ec=0
+          pytest -q --continue-on-collection-errors > pytest.log 2>&1 || ec=$?
+          tail -60 pytest.log
+          if [ "$ec" -ne 0 ]; then
+            grep -E "^(FAILED|ERROR)" pytest.log | head -20 > probe-fails.txt || true
+            while IFS= read -r line; do
+              echo "::error::$(echo "$line" | cut -c1-200)"
+            done < probe-fails.txt
+          fi
+          exit $ec
 
   dependency-free-core:
     runs-on: ubuntu-latest
@@ -53,7 +63,7 @@ jobs:
       - name: Install system render dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreoffice-impress poppler-utils
+          sudo apt-get install -y libreoffice-impress poppler-utils fonts-noto-cjk
       - name: Install package and QA dependencies
         run: python -m pip install -e ".[pptx,qa,test]"
       - name: Run the reproducible benchmark suite
@@ -76,6 +86,6 @@ jobs:
           assert serve(stdin, stdout, workspace="dist") == 0
           responses = [json.loads(line) for line in stdout.getvalue().splitlines() if line.strip()]
           assert responses[0]["result"]["serverInfo"]["name"] == "ppt-agent", responses[0]
-          assert len(responses[1]["result"]["tools"]) == 10, responses[1]
+          assert len(responses[1]["result"]["tools"]) == 17, responses[1]
           print("MCP handshake OK")
           PY

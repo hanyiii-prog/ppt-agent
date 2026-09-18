@@ -166,7 +166,7 @@ def test_tool_names_include_clone_tools():
     names = tool_names()
     assert {"ppt_agent_clone_plan", "ppt_agent_clone_build",
             "ppt_agent_clone_audit"} <= set(names)
-    assert len(names) == 13
+    assert len(names) == 17  # 13 base + 4 fidelity-engine tools (v1.11)
 
 
 def test_clone_tools_round_trip(tmp_path):

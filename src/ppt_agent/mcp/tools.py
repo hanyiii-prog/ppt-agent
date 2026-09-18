@@ -271,6 +271,105 @@ def tool_clone_audit(arguments: dict[str, Any], context: ToolContext) -> dict[st
     return context.agent.clone_audit(deck)
 
 
+# --- fidelity engine (V1.11) ----------------------------------------------
+def tool_fidelity_extract(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..fidelity import extract_fidelity_dna
+
+    source = context.input_path(_string(arguments, "source"))
+    slide_index = int(arguments.get("slide", 1))
+    dna = extract_fidelity_dna(source, slide_index=slide_index)
+    summary = {
+        "source": str(source),
+        "slide_index": slide_index,
+        "schema": dna.get("schema"),
+        "page_kind": dna.get("page_kind"),
+        "surface_role": dna.get("surface_role"),
+        "presentation": dna.get("presentation"),
+        "layer_count": len((dna.get("slide") or {}).get("shapes", [])),
+        "layout_layer_count": len((dna.get("layout") or {}).get("shapes", [])),
+        "master_layer_count": len((dna.get("master") or {}).get("shapes", [])),
+        "asset_count": len(dna.get("assets", {})),
+        "placeholder_resolutions": len(dna.get("placeholder_resolutions", [])),
+        "toc": dna.get("toc"),
+    }
+    output = _optional_string(arguments, "output")
+    if output:
+        target = context.output_path(output)
+        target.write_text(json.dumps(dna, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        summary["dna_path"] = str(target)
+    return summary
+
+
+def tool_fidelity_diff(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..fidelity import extract_fidelity_dna
+    from ..fidelity_diff import compare_dna
+
+    reference = context.input_path(_string(arguments, "reference"))
+    candidate = context.input_path(_string(arguments, "candidate"))
+    slide_index = int(arguments.get("slide", 1))
+    report = compare_dna(
+        extract_fidelity_dna(reference, slide_index=slide_index),
+        extract_fidelity_dna(candidate, slide_index=slide_index),
+        tolerance=float(arguments.get("tolerance", 0.0005)),
+    )
+    payload = report.to_dict()
+    payload.update({
+        "reference": str(reference),
+        "candidate": str(candidate),
+        "slide_index": slide_index,
+    })
+    output = _optional_string(arguments, "output")
+    if output:
+        target = context.output_path(output)
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        payload["report_path"] = str(target)
+    return payload
+
+
+def tool_fidelity_repair(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..fidelity_pipeline import FidelityRepairExhausted, repair_deck
+
+    reference = context.input_path(_string(arguments, "reference"))
+    candidate = context.input_path(_string(arguments, "candidate"))
+    output = context.output_path(_string(arguments, "output"))
+    workspace = context.output_path(_optional_string(arguments, "workspace") or "fidelity-repair")
+    try:
+        result = repair_deck(
+            reference, candidate, workspace,
+            max_iterations=int(arguments.get("max_iterations", 3)),
+            render=bool(arguments.get("render", False)),
+        )
+    except FidelityRepairExhausted as exc:
+        result = exc.payload
+    result["repaired_output"] = str(output)
+    import shutil
+
+    if result.get("candidate_final") and Path(result["candidate_final"]) != output:
+        shutil.copy(result["candidate_final"], output)
+    return result
+
+
+def tool_fidelity_validate(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..fidelity_pipeline import validate_deck_fidelity
+
+    reference = context.input_path(_string(arguments, "reference"))
+    candidate = context.input_path(_string(arguments, "candidate"))
+    workspace = context.output_path(_optional_string(arguments, "workspace") or "fidelity-validate")
+    result = validate_deck_fidelity(
+        reference, candidate, workspace,
+        render=bool(arguments.get("render", True)),
+        threshold_ssim=float(arguments.get("ssim", 0.995)),
+        threshold_mae=float(arguments.get("mae", 0.005)),
+        threshold_mismatch=float(arguments.get("mismatch", 0.01)),
+    )
+    output = _optional_string(arguments, "output")
+    if output:
+        target = context.output_path(output)
+        target.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        result["report_path"] = str(target)
+    return result
+
+
 TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str, Any]]] = {
     "ppt_agent_capabilities": tool_capabilities,
     "ppt_agent_analyze_pptx": tool_analyze_pptx,
@@ -285,6 +384,10 @@ TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str
     "ppt_agent_clone_plan": tool_clone_plan,
     "ppt_agent_clone_build": tool_clone_build,
     "ppt_agent_clone_audit": tool_clone_audit,
+    "ppt_agent_fidelity_extract": tool_fidelity_extract,
+    "ppt_agent_fidelity_diff": tool_fidelity_diff,
+    "ppt_agent_fidelity_repair": tool_fidelity_repair,
+    "ppt_agent_fidelity_validate": tool_fidelity_validate,
 }
 
 
@@ -507,6 +610,82 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "inputSchema": _schema(
             {"pptx": {"type": "string", "description": "Path to the deck to audit"}},
             ["pptx"],
+        ),
+    },
+    {
+        "name": "ppt_agent_fidelity_extract",
+        "description": (
+            "Fidelity engine: extract the hardened OOXML fidelity DNA of one slide "
+            "(page kind, global render order, resolved styles/typography/tables/"
+            "connectors, inheritance chains). The full DNA (raw XML evidence) is "
+            "written to 'output' when given."
+        ),
+        "inputSchema": _schema(
+            {
+                "source": {"type": "string", "description": "Path to the PPTX"},
+                "slide": {"type": "integer", "description": "1-based slide index (default 1)"},
+                "output": {"type": "string", "description": "Optional path for the full DNA JSON"},
+            },
+            ["source"],
+        ),
+    },
+    {
+        "name": "ppt_agent_fidelity_diff",
+        "description": (
+            "Fidelity engine: matching-based structural diff of one slide between two "
+            "decks, classified with the diff taxonomy (layer/geometry/style/text/media/"
+            "inheritance/structure codes) plus semantic XML hashes."
+        ),
+        "inputSchema": _schema(
+            {
+                "reference": {"type": "string"},
+                "candidate": {"type": "string"},
+                "slide": {"type": "integer", "description": "1-based slide index (default 1)"},
+                "tolerance": {"type": "number"},
+                "output": {"type": "string", "description": "Optional path for the full report JSON"},
+            },
+            ["reference", "candidate"],
+        ),
+    },
+    {
+        "name": "ppt_agent_fidelity_repair",
+        "description": (
+            "Fidelity engine: iteratively repair a candidate deck against a reference "
+            "(structural diff -> property-level OOXML repair -> re-extract -> re-diff; "
+            "max_iterations default 3). Writes the repaired deck to 'output' and returns "
+            "the loop payload including remaining issues and oscillation reports."
+        ),
+        "inputSchema": _schema(
+            {
+                "reference": {"type": "string"},
+                "candidate": {"type": "string"},
+                "output": {"type": "string", "description": "Destination .pptx path for the repaired deck"},
+                "workspace": {"type": "string"},
+                "max_iterations": {"type": "integer"},
+                "render": {"type": "boolean", "description": "Run the visual gate once the structure matches"},
+            },
+            ["reference", "candidate", "output"],
+        ),
+    },
+    {
+        "name": "ppt_agent_fidelity_validate",
+        "description": (
+            "Fidelity engine: structural gate + rendered visual comparison. Renderer "
+            "unavailability and renderer errors are reported explicitly and never "
+            "downgraded to a pass."
+        ),
+        "inputSchema": _schema(
+            {
+                "reference": {"type": "string"},
+                "candidate": {"type": "string"},
+                "workspace": {"type": "string"},
+                "render": {"type": "boolean", "description": "Default true"},
+                "ssim": {"type": "number"},
+                "mae": {"type": "number"},
+                "mismatch": {"type": "number"},
+                "output": {"type": "string", "description": "Optional path for the report JSON"},
+            },
+            ["reference", "candidate"],
         ),
     },
 ]
