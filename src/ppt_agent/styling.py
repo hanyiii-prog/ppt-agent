@@ -149,11 +149,28 @@ def estimate_flow_height(component: Any, width_in: float, default_size_pt: float
     return round(lines * line_height + 0.12, 3)
 
 
-def resolve_layout(slide: "Slide", width_in: float, height_in: float) -> list[LayoutBox]:
+def resolve_layout(
+    slide: "Slide",
+    width_in: float,
+    height_in: float,
+    *,
+    engine: str = "legacy",
+    report: dict[str, Any] | None = None,
+) -> list[LayoutBox]:
     """Resolve every component of a slide into an absolute box, in inches.
 
     Components with explicit geometry are placed verbatim. Components without
     geometry flow top-down from a purpose-dependent start cursor.
+
+    ``engine`` selects the flow stage *inside this single algorithm* (red
+    line 1: there is exactly one layout algorithm):
+
+    * ``legacy`` (default) -- the pre-V2.1 behaviour, byte-identical (guarded
+      by tests/test_layout_solver.py::test_legacy_engine_is_byte_identical);
+    * ``solver`` -- the same initial resolution passed through the batch 3.D
+      upgrade stages (glyph-aware re-measure, collision push-down, grid snap,
+      bounded overflow shrink). Absolute geometry is verbatim in both engines.
+      A ``report`` dict, when given, receives the solver metrics.
     """
     purpose = (getattr(slide, "purpose", None) or "content").lower()
     content_width = width_in - 2 * MARGIN_IN
@@ -184,7 +201,16 @@ def resolve_layout(slide: "Slide", width_in: float, height_in: float) -> list[La
         boxes.append(LayoutBox(component, MARGIN_IN, cursor, content_width, height, font_pt, False))
         cursor += height + FLOW_GAP_IN
 
-    return boxes
+    if engine == "legacy":
+        return boxes
+    if engine == "solver":
+        from .layout.layout_solver import solve  # lazy: styling must not import layout eagerly
+
+        solved, solver_report = solve(boxes, width_in, height_in)
+        if isinstance(report, dict):
+            report.update(solver_report)
+        return solved
+    raise ValueError(f"unknown layout engine {engine!r}; use 'legacy' or 'solver'")
 
 
 def group_children(component: Any) -> list[Any]:
