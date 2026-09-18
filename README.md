@@ -15,7 +15,7 @@
 - **中文文档：** 当前 README
 - **English:** see the English sections below
 
-## 当前版本：V1.11（分支 `v1.11-fidelity-engine`）
+## 当前版本：V2.0.0（Fidelity Engine GA，main 分支）
 
 V1.11 建成 **Fidelity Engine 高保真闭环**——不再满足于“结构相似”，而是完整走通 `OOXML 证据 → Canonical Fidelity Model → 元素匹配 → 结构 Diff 2.0 → 属性级修复 → 渲染 → 区域视觉 Diff → 迭代修复 → 回归门禁`：
 
@@ -518,7 +518,7 @@ page plan → one shell per spec, dispatched to the page kits, audited) and
 `ppt_agent_clone_audit` (the six-kind page gate). A host agent now drives the
 byte-identical-template route without writing Python.
 
-V1.11 (branch `v1.11-fidelity-engine`) builds the **Fidelity Engine closed loop** — matching
+V2.0.0 (Fidelity Engine GA, formerly `v1.11-fidelity-engine`) builds the **Fidelity Engine closed loop** — matching
 based element pairing, fine-grained diff codes, semantic XML hashing, minimal property-level
 OOXML repair, renderer-status-aware visual comparison with region and critical-region gates,
 an iterative repair loop with oscillation detection, and a chrome fidelity gate for the clone
