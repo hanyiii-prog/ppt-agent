@@ -273,6 +273,7 @@ def chrome_fidelity_gate(
 
 
 def _demand(pages: list[dict[str, Any]]) -> dict[str, int]:
+    """Shells the plan consumes, per *bucket* (the pool depletion view)."""
     demand: dict[str, int] = {}
     for spec in pages:
         role = _role_of(spec)
@@ -403,7 +404,12 @@ def _render_content(slide: Any, spec: dict[str, Any], prs: Any, index: int) -> l
         if key not in _RESERVED and key not in KIT_POSITIONAL[kit]
     }
     consumed = _RESERVED | set(KIT_POSITIONAL[kit])
-    ignored = sorted(set(spec) - consumed)
+    # forwarded = everything the kit actually receives; only keys that are
+    # neither consumed nor forwarded are truly ignored (an unknown key that
+    # reached the kit and was accepted is NOT ignored -- earlier wording
+    # flagged forwarded kwargs like cols/bottom and mislead callers)
+    forwarded = set(extra)
+    ignored = sorted(set(spec) - consumed - forwarded)
     fn = getattr(K, kit)
     try:
         fn(slide, *positional, title=title, lead=lead, prs=prs, **extra)
