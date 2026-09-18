@@ -50,7 +50,7 @@ class ToolContext:
         return target
 
 
-# --- argument helpers ------------------------------------------------------
+# --- argument helpers -----------------------------------------------------
 def _require(arguments: dict[str, Any], key: str) -> Any:
     if key not in arguments or arguments[key] in (None, ""):
         raise ToolError(f"missing required argument: {key}")
@@ -391,6 +391,17 @@ def tool_narrative_plan(arguments: dict[str, Any], context: ToolContext) -> dict
     return narrative
 
 
+def tool_generate(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..agent.pipeline import run_pipeline
+
+    text = _read_text(arguments, context, source_key="source", inline_key="markdown")
+    out_dir = _optional_string(arguments, "out_dir") or "pipeline"
+    density = (_optional_string(arguments, "density") or "standard").lower()
+    if density not in ("compact", "standard", "air"):
+        raise ToolError("'density' must be compact, standard or air")
+    return run_pipeline(text, out_dir=context.output_path(out_dir), density=density)
+
+
 TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str, Any]]] = {
     "ppt_agent_capabilities": tool_capabilities,
     "ppt_agent_analyze_pptx": tool_analyze_pptx,
@@ -410,6 +421,7 @@ TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str
     "ppt_agent_fidelity_repair": tool_fidelity_repair,
     "ppt_agent_fidelity_validate": tool_fidelity_validate,
     "ppt_agent_narrative_plan": tool_narrative_plan,
+    "ppt_agent_generate": tool_generate,
 }
 
 
@@ -723,6 +735,23 @@ TOOL_SPECS: list[dict[str, Any]] = [
             {
                 "markdown": {"type": "string", "description": "Inline Markdown content"},
                 "source": {"type": "string", "description": "Path to a Markdown file"},
+            },
+        ),
+    },
+    {
+        "name": "ppt_agent_generate",
+        "description": (
+            "V2.1 end-to-end pipeline: Markdown -> analyzed -> planned -> archetypes -> "
+            "solver layout -> rendered PPTX + HTML -> delivery gate -> repair cycle. "
+            "The report states every stage's decision, the gate obligations and the "
+            "honest llm disclosure (sampled|fallback|off)."
+        ),
+        "inputSchema": _schema(
+            {
+                "markdown": {"type": "string", "description": "Inline Markdown content"},
+                "source": {"type": "string", "description": "Path to a Markdown file"},
+                "out_dir": {"type": "string", "description": "Output directory inside the workspace (default 'pipeline')"},
+                "density": {"type": "string", "enum": ["compact", "standard", "air"]},
             },
         ),
     },
