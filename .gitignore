@@ -15,7 +15,6 @@ env/
 .ruff_cache/
 .coverage
 .coverage.*
-htmlcov/
 
 # Local render / sample output (visual regression, deck previews)
 shots*/

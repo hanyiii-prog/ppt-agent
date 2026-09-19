@@ -276,7 +276,8 @@ _PARSERS: dict[str, Any] = {
 
 
 def parse_auto(path: str | Path) -> ContentDocument:
-    """Parse any supported source file by extension."""
+    """Parse any supported source file by extension. Never raises for
+    unknown extensions beyond the underlying parser's own error."""
     source = Path(path)
     entry = _PARSERS.get(source.suffix.lower())
     if entry is None:
