@@ -85,7 +85,7 @@ def build_presentation_plan(
     toc_added = False
     for heading, children in content_sections:
         if len(content_sections) >= 2 and not toc_added:
-            add_page("toc", "\u76ee\u5f55", [])
+            add_page("toc", "目录", [])
             toc_added = True
         add_page("section", heading.text, [heading])
 
@@ -101,7 +101,7 @@ def build_presentation_plan(
                 remaining.append(block)
         _add_content_pages(add_page, heading, remaining, capacity)
 
-    add_page("closing", "\u8c22\u8c22", [])
+    add_page("closing", "谢谢", [])
 
     estimate = estimate_page_count(document, density=density)
     return {
