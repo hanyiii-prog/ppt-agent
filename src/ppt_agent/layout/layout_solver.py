@@ -1,7 +1,7 @@
 """Layout Solver: deterministic upgrade stage inside resolve_layout().
 
 Red line 1: this solver does NOT replace ``styling.resolve_layout`` -- it is
-the ``engine="solver"" stage *inside* it. Input is the legacy-resolved box
+the ``engine="solver"`` stage *inside* it. Input is the legacy-resolved box
 list; output is the same list with the flow boxes improved:
 
 1. **re-measure**  glyph-aware text heights (typography_engine) replace the

@@ -26,14 +26,24 @@ _CHARS_PER_PAGE = 260.0
 _DENSITY: dict[str, float] = {"compact": 1.3, "standard": 1.0, "air": 0.75}
 
 
+def page_capacity(density: str = "standard") -> float:
+    """Character budget of one page at ``density`` (public, single-sourced).
+
+    Callers that paginate their own units (the clone planner, which must keep
+    tables atomic and cards whole) need the same number this module reasons on;
+    keeping one function avoids two drifting capacities.
+    """
+    factor = _DENSITY.get(density)
+    if factor is None:
+        raise ValueError(f"unknown density {density!r}; use compact|standard|air")
+    return _CHARS_PER_PAGE * factor
+
+
 def build_presentation_plan(
     document: ContentDocument, *, density: str = "standard"
 ) -> dict[str, Any]:
     """ContentDocument -> presentation plan dict."""
-    factor = _DENSITY.get(density)
-    if factor is None:
-        raise ValueError(f"unknown density {density!r}; use compact|standard|air")
-    capacity = _CHARS_PER_PAGE * factor
+    capacity = page_capacity(density)
 
     pages: list[dict[str, Any]] = []
 
@@ -71,7 +81,6 @@ def build_presentation_plan(
         for heading, children in sections
         if (heading.level or 1) >= 2
     ]
-    section_lookup: dict[str, list] = {heading.id: children for heading, children in sections}
 
     toc_added = False
     for heading, children in content_sections:
@@ -123,3 +132,6 @@ def _add_content_pages(add_page, heading, blocks: list, capacity: float) -> None
         volume += block_volume
     if current:
         add_page("content", heading.text, current)
+
+
+__all__ = ["SCHEMA", "build_presentation_plan", "page_capacity"]

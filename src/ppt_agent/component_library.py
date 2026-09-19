@@ -47,6 +47,7 @@ def build_component_library(
             samples.setdefault(key, record)
 
     keys = [key for key, members in page_sets.items() if len(members) >= min_pages]
+    key_set = set(keys)
 
     # union-find over qualifying pairs
     parent: dict[str, str] = {key: key for key in keys}
