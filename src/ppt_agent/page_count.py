@@ -37,7 +37,8 @@ def _section_volume(blocks: list) -> tuple[float, int]:
 
 
 def estimate_page_count(
-    document: ContentDocument, *, density: str = "standard"
+    document: ContentDocument, *, density: str = "standard",
+    empty_section_policy: str = "page",
 ) -> dict[str, Any]:
     """Estimate the deck size for a ContentDocument (analyzed or raw)."""
     factor = _DENSITY.get(density)
@@ -58,7 +59,7 @@ def estimate_page_count(
         volume, tables = _section_volume(children)
         content_pages = int(volume // capacity) + (1 if volume % capacity else 0)
         if volume == 0 and tables == 0:
-            content_pages = 1  # an empty section still earns one content page
+            content_pages = 0 if empty_section_policy == "skip" else 1
         per_section.append({
             "title": heading.text,
             "level": heading.level,
@@ -85,5 +86,6 @@ def estimate_page_count(
             "density_factor": factor,
             "table_page_policy": "one page per table",
             "toc_policy": "toc page only when sections >= 2",
+            "empty_section_policy": empty_section_policy,
         },
     }

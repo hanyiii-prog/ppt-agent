@@ -33,6 +33,10 @@ SUPPORTED_TEMPLATE_DNA_VERSIONS: tuple[str, ...] = ("0.4", TEMPLATE_DNA_SCHEMA_V
 CONTENT_IR_SCHEMA_VERSION = "0.1"
 SUPPORTED_CONTENT_IR_VERSIONS: tuple[str, ...] = (CONTENT_IR_SCHEMA_VERSION,)
 
+# Page-kind DNA dialects (per-kind segments from the design DNA layer).
+PAGE_KIND_DNA_SCHEMA_VERSION = "1"
+SUPPORTED_PAGE_KIND_DNA_VERSIONS: tuple[str, ...] = (PAGE_KIND_DNA_SCHEMA_VERSION,)
+
 
 class ContractError(ValueError):
     """Raised when an input violates a stable public contract."""
@@ -278,6 +282,26 @@ def is_content_ir_compatible(payload: Mapping[str, Any]) -> bool:
     return True
 
 
+# --- Page-kind DNA version contract -----------------------------------------
+def page_kind_dna_version_of(payload: Mapping[str, Any]) -> str:
+    schema = payload.get("schema") if isinstance(payload, Mapping) else None
+    if not isinstance(schema, str) or not schema.startswith("page-kind-dna/"):
+        return ""
+    return schema.split("/", 1)[1]
+
+
+def check_page_kind_dna_version(payload: Mapping[str, Any]) -> str:
+    version = page_kind_dna_version_of(payload)
+    if not version:
+        raise ContractError("page-kind-dna payload is missing a 'page-kind-dna/' schema stamp")
+    if version not in SUPPORTED_PAGE_KIND_DNA_VERSIONS:
+        raise ContractError(
+            f"unsupported page-kind-dna version {version!r}; "
+            f"supported: {', '.join(SUPPORTED_PAGE_KIND_DNA_VERSIONS)}"
+        )
+    return version
+
+
 # --- Machine readable descriptor ------------------------------------------
 def contract_descriptor() -> dict[str, Any]:
     """Describe every stable version and capability. Served by the MCP tool surface."""
@@ -289,6 +313,8 @@ def contract_descriptor() -> dict[str, Any]:
         "supported_template_dna_versions": list(SUPPORTED_TEMPLATE_DNA_VERSIONS),
         "content_ir_schema_version": CONTENT_IR_SCHEMA_VERSION,
         "supported_content_ir_versions": list(SUPPORTED_CONTENT_IR_VERSIONS),
+        "page_kind_dna_schema_version": PAGE_KIND_DNA_SCHEMA_VERSION,
+        "supported_page_kind_dna_versions": list(SUPPORTED_PAGE_KIND_DNA_VERSIONS),
         "adapter_protocol_version": ADAPTER_PROTOCOL_VERSION,
         "renderer_sdk_version": RENDERER_SDK_VERSION,
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,

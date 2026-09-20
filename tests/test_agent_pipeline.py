@@ -43,7 +43,7 @@ def report(tmp_path_factory: pytest.TempPathFactory) -> dict:
 
 
 def test_pipeline_delivers_real_artifacts(report: dict) -> None:
-    assert report["schema"] == "pipeline/v1"
+    assert report["schema"] == "pipeline/v2"
     assert Path(report["artifacts"]["pptx"]).exists(), "native pptx must exist"
     assert Path(report["artifacts"]["html"]).exists(), "html preview must exist"
     assert report["page_total"] >= 6  # cover + toc + 4 sections(+content)
@@ -72,7 +72,7 @@ def test_pipeline_archetypes_cover_content_pages(report: dict) -> None:
 def test_plan_to_ir_components_carry_absolute_geometry(tmp_path: Path) -> None:
     document = parse_markdown(SAMPLE)
     plan = build_presentation_plan(document)
-    presentation = plan_to_ir(plan, document, title="测试")
+    presentation, _cache = plan_to_ir(plan, document, title="测试")
     assert presentation.title == "测试"
     for slide in presentation.slides:
         assert slide.components, f"{slide.id} has no components"

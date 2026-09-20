@@ -1,23 +1,27 @@
-"""Plan -> Universal Presentation IR with solver-computed absolute geometry.
+﻿"""Plan -> Universal Presentation IR with solver-computed absolute geometry.
 
-The Presentation Plan (kind + archetype + source blocks) becomes IR slides
-whose components carry **explicit geometry**: the layout solver (batch 3.D)
-resolves the flow once here, and the renderers then place everything
-verbatim through the absolute-geometry path -- the invariant-safe route.
+V2.2: the designed route now consumes per-page-kind DNA so cover pages look
+like the template's cover, content pages like the template's content pages,
+and so on. Elements are resolved through the persistent element store
+(cache hit = zero generation cost); on a miss they are generated (rules
+first, LLM as bounded fallback) and stored for reuse.
 
-Kind mapping: cover -> cover, toc -> agenda, section -> section,
-content -> content, closing -> closing. Content pages become a title
-component plus one body component per source block (tables keep their
-structured data). Cloning stays on the clone tools: a template DNA payload
-makes this module refuse honestly rather than imitate the clone route.
+Clone route (template DNA given) still refuses honestly -- it belongs in the
+clone tools. The ``page_kind_dna`` and ``element_cache_report`` parameters
+are new in V2.2 and optional (defaults keep V2.1 behaviour).
 """
 
 from __future__ import annotations
 
-from typing import Any
+import copy
+from typing import Any, Callable
 
+from ..component_store import find_by_kind, increment_usage
+from ..component_style import apply_dna_to_slots
 from ..content_ir import ContentDocument
 from ..contracts import IR_SCHEMA_VERSION, check_template_dna_version
+from ..element_generator import generate_with_cache
+from ..page_kind_dna import get_kind_dna
 from ..ir import Component, Presentation, Slide
 from ..styling import resolve_layout
 
@@ -31,6 +35,8 @@ _PURPOSE_BY_KIND = {
     "closing": "closing",
 }
 
+_DARK_FALLBACK = {"fill": {"type": "solid", "rgb": "0A3A52"}}
+
 
 def _component_text(block: Any) -> str | None:
     if block.type in ("bullets", "ordered"):
@@ -38,8 +44,43 @@ def _component_text(block: Any) -> str | None:
         lines = [f"- {item}" if marker else item for item in block.items]
         return "\n".join(lines) if lines else None
     if block.type == "table":
-        return None  # tables keep structured data below
+        return None
     return block.text or None
+
+
+def _resolve_background(kind: str, kind_dna: dict[str, Any]) -> dict[str, Any]:
+    """Background fill for one page kind, from its DNA segment or a fallback."""
+    color = (kind_dna.get("color") or {})
+    surface = color.get("surface")
+    primary = color.get("primary")
+    if kind in ("cover", "section", "closing"):
+        rgb = primary or "0A3A52"
+        return {"fill": {"type": "solid", "rgb": rgb}}
+    rgb = surface or "FFFFFF"
+    return {"fill": {"type": "solid", "rgb": rgb}}
+
+
+def _resolve_text_color(kind: str, kind_dna: dict[str, Any]) -> str:
+    color = (kind_dna.get("color") or {})
+    if kind in ("cover", "section", "closing"):
+        return color.get("surface") or "FFFFFF"
+    return color.get("text") or "333333"
+
+
+def _element_spec_for_block(block: Any, archetype: str) -> dict[str, Any]:
+    """Map a content block + archetype to an element store lookup spec."""
+    spec: dict[str, Any] = {"type": "body", "text": block.text or ""}
+    if block.type in ("bullets", "ordered"):
+        spec = {"type": "bullet_list", "items": block.items}
+    elif block.type == "table":
+        spec = {"type": "table", "headers": block.headers, "rows": block.rows}
+    elif block.type == "quote":
+        spec = {"type": "quote", "text": block.text}
+    if archetype == "cards_grid" and block.type in ("bullets", "ordered"):
+        spec["type"] = "card"
+    elif archetype == "metrics_row" and block.type in ("bullets", "ordered"):
+        spec["type"] = "metric"
+    return spec
 
 
 def plan_to_ir(
@@ -48,10 +89,17 @@ def plan_to_ir(
     *,
     title: str | None = None,
     template_dna: dict[str, Any] | None = None,
-) -> Presentation:
-    """Annotated Presentation Plan -> Presentation IR (absolute geometry)."""
+    page_kind_dna: dict[str, Any] | None = None,
+    llm_fn: Callable[[str], str] | None = None,
+    template_fingerprint: str = "",
+    layout_engine: str = "solver",
+) -> tuple[Presentation, dict[str, Any]]:
+    """Annotated Presentation Plan -> (Presentation IR, element cache report).
+
+    Returns a tuple so the pipeline can surface the element cache report
+    (hits / misses / tokens saved) without parsing the IR to recover it.
+    """
     if template_dna is not None:
-        # refuse honestly: the clone route owns template-driven generation
         check_template_dna_version(template_dna)
         raise ValueError(
             "plan_to_ir implements the DESIGNED route; template DNA implies the "
@@ -61,10 +109,6 @@ def plan_to_ir(
     lookup = {block.id: block for block in document.blocks}
     slides: list[Slide] = []
     width_in, height_in = SLIDE_SIZE_IN
-    # designed-route chrome, mirroring the design layer's treatment: dark
-    # full-bleed surface for cover/section/closing, white for content pages
-    DARK_BG = {"type": "solid", "rgb": "0A3A52"}
-    DARK_TEXT = {"color": "FFFFFF"}
 
     section_titles = [
         str(page.get("title") or "")
@@ -72,50 +116,98 @@ def plan_to_ir(
         if page.get("kind") == "section"
     ]
 
+    cache_report: dict[str, Any] = {"hits": 0, "misses": 0, "llm_calls": 0, "tokens_estimate": 0}
+
     for page in plan.get("pages") or []:
         kind = str(page.get("kind") or "content")
         purpose = _PURPOSE_BY_KIND.get(kind, "content")
+        archetype = (page.get("archetype") or {}).get("archetype") or "title_bullets"
+
+        kind_dna = get_kind_dna(page_kind_dna, kind) if page_kind_dna else {}
         components: list[Component] = []
         slide_data: dict[str, Any] = {}
 
-        if kind in ("cover", "section", "closing"):
-            slide_data["background"] = {"fill": dict(DARK_BG)}
-        if page.get("title"):
-            style: dict[str, Any] = {"font": dict(DARK_TEXT)} if kind in ("cover", "section", "closing") else {}
-            components.append(Component(type="title", text=str(page["title"]), style=style))
-        if kind == "toc":
-            # a TOC page shows the real agenda: the section titles
-            if section_titles:
-                components.append(Component(
-                    type="body",
-                    text="\n".join(f"- {name}" for name in section_titles),
-                ))
-        for block_id in page.get("source_blocks") or []:
-            block = lookup.get(block_id)
-            if block is None:
-                continue
-            text = _component_text(block)
-            if block.type == "table":
-                components.append(Component(
-                    type="table",
-                    text="；".join(block.headers) if block.headers else None,
-                    data={"headers": block.headers, "rows": block.rows},
-                ))
-            elif text:
-                components.append(Component(type="body", text=text))
+        if kind_dna:
+            slide_data["background"] = _resolve_background(kind, kind_dna)
+        elif kind in ("cover", "section", "closing"):
+            slide_data["background"] = copy.deepcopy(_DARK_FALLBACK)
 
-        slide = Slide(id=f"slide-{page.get('page_no', len(slides) + 1):02d}",
-                      purpose=purpose, components=components, data=slide_data or None)
-        # the ONE layout algorithm resolves geometry; the solver stage upgrades
-        # the flow while absolute decisions stay verbatim
-        resolved = resolve_layout(slide, width_in, height_in, engine="solver")
+        text_color = _resolve_text_color(kind, kind_dna) if kind_dna else None
+
+        if page.get("title"):
+            style: dict[str, Any] = {}
+            if text_color:
+                style["font"] = {"color": text_color}
+            components.append(Component(type="title", text=str(page["title"]), style=style))
+
+        if kind == "toc" and section_titles:
+            components.append(Component(
+                type="body",
+                text="\n".join(f"- {name}" for name in section_titles),
+            ))
+
+        # try stored components first (zero generation cost)
+        stored = find_by_kind(archetype, item_count=len(page.get("source_blocks") or []))
+        if stored:
+            component_template = stored[0]
+            styled_slots = apply_dna_to_slots(component_template, page_kind_dna or {}, kind) if page_kind_dna else component_template.get("slots") or []
+            for slot in styled_slots:
+                cache_report["hits"] += 1
+                increment_usage(component_template.get("component_id") or "")
+                components.append(Component(
+                    type=slot.get("role") or "body",
+                    text=slot.get("text"),
+                    style=slot.get("style") or {},
+                ))
+        else:
+            for block_id in page.get("source_blocks") or []:
+                block = lookup.get(block_id)
+                if block is None:
+                    continue
+                spec = _element_spec_for_block(block, archetype)
+                element, meta = generate_with_cache(
+                    spec, llm_fn=llm_fn, template_fingerprint=template_fingerprint
+                )
+                cache_report["hits" if meta.get("cache") == "hit" else "misses"] += 1
+                cache_report["tokens_estimate"] += meta.get("tokens_estimate") or 0
+                if meta.get("generator") == "llm":
+                    cache_report["llm_calls"] += 1
+
+                style = dict(element.get("_style") or {})
+                if text_color and not style.get("font"):
+                    style["font"] = {"color": text_color}
+
+                if block.type == "table":
+                    components.append(Component(
+                        type="table",
+                        text="\n".join(block.headers) if block.headers else None,
+                        style=style,
+                        data={"headers": block.headers, "rows": block.rows},
+                    ))
+                else:
+                    components.append(Component(
+                        type=element.get("type") or "body",
+                        text=element.get("text") or _component_text(block),
+                        style=style,
+                    ))
+
+        slide = Slide(
+            id=f"slide-{page.get('page_no', len(slides) + 1):02d}",
+            purpose=purpose, components=components, data=slide_data or None,
+        )
+        resolved = resolve_layout(slide, width_in, height_in, engine=layout_engine)
         for component, box in zip(slide.components, resolved):
             component.x, component.y = round(box.x, 4), round(box.y, 4)
             component.w, component.h = round(box.w, 4), round(box.h, 4)
         slides.append(slide)
 
-    return Presentation(
+    presentation = Presentation(
         version=IR_SCHEMA_VERSION,
         title=title or document.title or "Presentation",
         slides=slides,
     )
+    cache_report["hit_rate"] = (
+        cache_report["hits"] / (cache_report["hits"] + cache_report["misses"])
+        if (cache_report["hits"] + cache_report["misses"]) else 0.0
+    )
+    return presentation, cache_report

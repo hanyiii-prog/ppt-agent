@@ -121,8 +121,22 @@ def validate_design(
         entry["gap_in"] for entry in ((rules.get("spacing") or {}).get("dominant_horizontal") or [])
     }
     if template_h:
+        # one graph for the whole deck, indexed by slide (V2.2: was per-page rebuild)
+        full_graph = build_spacing_graph(design_dna)
+        per_page_gaps: dict[int, list[float]] = {}
         for page in design_dna.get("slides") or []:
-            graph = build_spacing_graph({"slides": [page], "masters": []})
+            slide_no = int(page.get("slide") or 0)
+            gaps = [entry["gap_in"] for entry in full_graph.get("per_page", {}).get(str(slide_no), {}).get("horizontal", [])]
+            per_page_gaps[slide_no] = gaps
+        for page in design_dna.get("slides") or []:
+            slide_no = int(page.get("slide") or 0)
+            for gap in per_page_gaps.get(slide_no, []):
+                if not any(abs(gap - known) <= max_spacing_deviation_in for known in template_h):
+                    findings.append({
+                        "code": "R-SPACING-001",
+                        "severity": "low",
+                        "detail": f"page {slide_no}: horizontal gap {gap}in deviates from template rhythm {sorted(template_h)}",
+                    })
             for entry in graph["global_dominant"]["horizontal"]:
                 gap = entry["gap_in"]
                 if entry["count"] >= 2 and not any(abs(gap - known) <= max_spacing_deviation_in for known in template_h):

@@ -405,6 +405,8 @@ def build_design_dna(deck_dna: dict[str, Any]) -> dict[str, Any]:
     grouped = _records_by_kind(deck_dna)
     result = dict(deck_dna)
     result["schema"] = SCHEMA
+    from .template_fingerprint import compute_template_fingerprint
+    result["template_fingerprint"] = compute_template_fingerprint(deck_dna)
     result["design_dna"] = {
         "shape": _shape_dna(_iter_records(deck_dna), slide_area),
         "layout": _layout_dna(grouped, slide_w, slide_h),
