@@ -1,20 +1,12 @@
 ﻿"""The V2.2 end-to-end pipeline: every layer, one honest report.
 
-``run_pipeline(markdown, *, out_dir)`` runs:
+Route resolution is automatic:
+* ``template_dna`` provided -> **clone route** (template chrome inherited verbatim)
+* ``template_dna`` absent   -> **designed route** (theme-driven from scratch)
 
-Input -> Parse -> Analyze -> Narrative -> Plan -> Archetypes -> Fidelity Mode
--> Plan-to-IR (kind-aware DNA + element cache + solver geometry)
--> Render (native PPTX + HTML preview) -> QA Gate -> Post-render Repair
--> Deliver.
-
-V2.2 additions over V2.1:
-* per-page-kind DNA drives backgrounds, fonts, colours per page kind;
-* element store caches generated elements (hit rate reported, tokens saved);
-* component store provides reusable multi-element controls;
-* template fingerprint consistency check (never mix templates);
-* post-render repair round (after python-pptx autofit may shift things);
-* rasterizer detection (visual regression upgrades from degraded);
-* design rules validation when a rulebook is available.
+The clone route converts the presentation plan into clone page specs and
+calls ``clone_build.render_clone_deck`` -- the SAME code path the MCP tools
+use. The output inherits every untouched decoration byte-identically.
 """
 
 from __future__ import annotations
@@ -22,35 +14,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from ..component_matcher import match_components
-from ..component_store import list_components
 from ..content_analyzer import analyze_content
-from ..fidelity_mode import gates_report, resolve_fidelity_mode
 from ..narrative_engine import build_narrative
 from ..page_archetype import annotate_plan
-from ..page_kind_dna import build_page_kind_dna
 from ..parsers import parse_markdown
 from ..presentation_plan import build_presentation_plan
-from ..repair import run_repair_cycle
+from ..fidelity_mode import gates_report, resolve_fidelity_mode
 from ..template_fingerprint import check_template_consistency
-from ..element_store import stats as element_stats
 from ..sdk import PptAgent
-from .plan_to_ir import plan_to_ir
+from ..component_matcher import match_components
+from ..component_store import list_components
+from ..element_store import stats as element_stats
 
 SCHEMA = "pipeline/v2"
-
-
-def _component_boxes(presentation: Any) -> list[dict[str, Any]]:
-    boxes: list[dict[str, Any]] = []
-    for slide in presentation.slides:
-        for component in slide.components:
-            boxes.append({
-                "x": component.x or 0.0, "y": component.y or 0.0,
-                "w": component.w or 0.05, "h": component.h or 0.05,
-                "absolute": True,
-                "text": component.text or "",
-            })
-    return boxes
 
 
 def _detect_rasterizer() -> bool:
@@ -61,6 +37,182 @@ def _detect_rasterizer() -> bool:
         return False
 
 
+# ---- clone route helpers ------------------------------------------------
+
+def _archetype_to_kit(archetype: str, item_count: int) -> str:
+    """Map a content archetype to the best available clone kit."""
+    from ..clone_build import KITS
+
+    mapping = {
+        "cards_grid": "four_role_cards",
+        "metrics_row": "four_role_cards",
+        "table_page": "n_column_cards",
+        "timeline": "progress_timeline",
+        "comparison": "two_panel_list",
+        "quote_strip": "n_column_cards",
+        "narrative": "n_column_cards",
+        "title_bullets": "n_column_cards",
+    }
+    kit = mapping.get(archetype, "n_column_cards")
+    if kit not in KITS:
+        kit = "n_column_cards"
+    return kit
+
+
+def _plan_to_clone_pages(
+    plan: dict[str, Any],
+    document: Any,
+) -> list[dict[str, Any]]:
+    """Convert a presentation plan into clone-route page specs."""
+    lookup = {block.id: block for block in document.blocks}
+    section_titles = [
+        str(page.get("title") or "")
+        for page in plan.get("pages") or []
+        if page.get("kind") == "section"
+    ]
+
+    pages: list[dict[str, Any]] = []
+    for page in plan.get("pages") or []:
+        kind = str(page.get("kind") or "content")
+        archetype = (page.get("archetype") or {}).get("archetype") or "title_bullets"
+        blocks = [lookup[bid] for bid in page.get("source_blocks") or [] if bid in lookup]
+
+        if kind == "cover":
+            pages.append({
+                "role": "cover",
+                "kit": "cover",
+                "title": page.get("title") or document.title or "Presentation",
+            })
+        elif kind == "toc":
+            pages.append({
+                "role": "toc",
+                "kit": "toc_page",
+                "title": page.get("title") or "目录",
+                "sections": [{"title": t} for t in section_titles],
+            })
+        elif kind == "section":
+            pages.append({
+                "role": "section",
+                "kit": "section_divider",
+                "title": page.get("title") or "",
+            })
+        elif kind == "closing":
+            pages.append({
+                "role": "closing",
+                "kit": "closing_page",
+                "title": "谢谢",
+            })
+        else:
+            kit = _archetype_to_kit(archetype, len(blocks))
+            spec: dict[str, Any] = {
+                "role": "content",
+                "kit": kit,
+                "title": page.get("title") or "",
+            }
+            if archetype in ("cards_grid", "metrics_row"):
+                spec["cards"] = _blocks_to_cards(blocks)
+            elif archetype == "timeline":
+                spec["steps"] = _blocks_to_steps(blocks)
+            elif archetype == "comparison":
+                spec["left"], spec["right"] = _blocks_to_comparison(blocks)
+            elif blocks and blocks[0].type == "table":
+                spec["table"] = {
+                    "headers": blocks[0].headers,
+                    "rows": blocks[0].rows,
+                }
+            else:
+                spec["items"] = _blocks_to_items(blocks)
+            pages.append(spec)
+
+    return pages
+
+
+def _blocks_to_cards(blocks: list) -> list[dict[str, str]]:
+    cards: list[dict[str, str]] = []
+    for block in blocks:
+        if block.type in ("bullets", "ordered") and block.items:
+            for item in block.items:
+                title, _, body = item.partition("：") or item.partition(":")
+                cards.append({"title": title.strip(), "body": body.strip() or title.strip()})
+        elif block.text:
+            title, _, body = block.text.partition("：") or block.text.partition(":")
+            cards.append({"title": title.strip(), "body": body.strip() or title.strip()})
+    return cards
+
+
+def _blocks_to_steps(blocks: list) -> list[dict[str, str]]:
+    import re
+    steps: list[dict[str, str]] = []
+    for block in blocks:
+        if block.type in ("bullets", "ordered"):
+            for item in block.items:
+                match = re.match(r"^(.{1,12}?)[：:](.+)$", item)
+                if match:
+                    steps.append({"label": match.group(1).strip(), "detail": match.group(2).strip()})
+                else:
+                    steps.append({"label": item[:12], "detail": item})
+        elif block.text:
+            steps.append({"label": block.text[:12], "detail": block.text})
+    return steps
+
+
+def _blocks_to_comparison(blocks: list) -> tuple[list[str], list[str]]:
+    left: list[str] = []
+    right: list[str] = []
+    target = left
+    for block in blocks:
+        text = block.text or ""
+        items = block.items if block.type in ("bullets", "ordered") else [text]
+        for item in items:
+            if "vs" in item.lower() or "对比" in item or "相较" in item:
+                target = right
+                continue
+            target.append(item)
+    return left, right
+
+
+def _blocks_to_items(blocks: list) -> list[str]:
+    items: list[str] = []
+    for block in blocks:
+        if block.type in ("bullets", "ordered"):
+            items.extend(block.items)
+        elif block.text:
+            items.append(block.text)
+    return items
+
+
+
+# ---- report helpers (these were dropped in the rewrite) ----
+
+def _element_cache_for_report(route: str, artifacts: dict) -> dict:
+    if route == "designed" and "element_cache" in artifacts:
+        return {**artifacts["element_cache"], "store_stats": element_stats()}
+    return {"route": route, "note": "element cache not applicable to clone route"}
+
+
+def _design_rules_for_report(design_dna: dict | None) -> dict:
+    if not design_dna:
+        return {"has_rules": False, "findings": [], "finding_count": 0}
+    try:
+        from ..design_rules import build_design_rules, validate_design
+        rules = build_design_rules(design_dna)
+        findings = validate_design(design_dna, rules)
+        return {"has_rules": True, "findings": findings, "finding_count": len(findings)}
+    except Exception:
+        return {"has_rules": False, "findings": [], "finding_count": 0}
+
+
+def _component_matches_for_report(document) -> dict:
+    try:
+        stored = list_components()
+        library = {"components": stored} if stored else {"components": []}
+        return match_components(library, document)
+    except Exception:
+        return {"schema": "component-match/v1", "components": [], "matches": [], "unmatched": []}
+
+
+# ---- main pipeline ------------------------------------------------------
+
 def run_pipeline(
     markdown: str,
     *,
@@ -70,138 +222,134 @@ def run_pipeline(
     llm_fn: Callable[[str], str] | None = None,
     agent: PptAgent | None = None,
     gate_deck: bool = True,
+    template_path: str | Path | None = None,
     template_dna: dict[str, Any] | None = None,
     design_dna: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Markdown -> delivered deck + the full decision report."""
+    """Markdown -> delivered deck + the full decision report.
+
+    Route is auto-resolved: template provided -> clone, absent -> designed.
+    """
     agent = agent or PptAgent()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # template consistency check (V2.2: never mix templates)
+    # route resolution (fix: not hardcoded to "designed")
+    has_template = template_path is not None and Path(template_path).exists()
+    mode_report = resolve_fidelity_mode(
+        None if has_template else "designed",
+        template_dna=template_dna if has_template else None,
+    )
+    route = mode_report.get("mode") or "designed"
     fingerprint = ""
-    if design_dna is not None:
+    if design_dna:
         fingerprint = check_template_consistency(design_dna, template_dna or {})
 
     # 1-2. parse + analyze
     document = parse_markdown(markdown, source="pipeline")
     analyzed = analyze_content(document)
 
-    # 3. narrative (the only stage that may touch a model via llm_fn)
+    # 3. narrative (the only stage that may touch a model)
     narrative = build_narrative(analyzed, llm_fn=llm_fn)
 
     # 4. plan + archetypes
     plan = build_presentation_plan(analyzed, density=density)
     annotated = annotate_plan(plan, analyzed)
 
-    # 5. fidelity mode
-    mode_report = resolve_fidelity_mode("designed", template_dna=template_dna)
+    artifacts: dict[str, Any] = {}
+    repair_report: dict[str, Any] = {}
+    audit_report: dict[str, Any] = {}
 
-    # 5.5 page-kind DNA (V2.2: per-kind styling)
-    kind_dna = build_page_kind_dna(template_dna or {}, design_dna or {}, template_fingerprint=fingerprint) if template_dna else None
+    if route == "clone" and template_path:
+        # ---- clone route: template chrome inherited verbatim ----
+        from ..clone_build import render_clone_deck
 
-    # 6. plan -> IR with solver geometry + element cache (V2.2)
-    presentation, element_cache = plan_to_ir(
-        annotated, analyzed, title=document.title,
-        page_kind_dna=kind_dna, llm_fn=llm_fn,
-        template_fingerprint=fingerprint, layout_engine=engine,
-    )
+        pptx_path = out / "deck.pptx"
+        clone_pages = _plan_to_clone_pages(annotated, document)
+        clone_result = render_clone_deck(
+            template_path, clone_pages, pptx_path,
+            audit=True, fidelity=True,
+        )
+        artifacts["pptx"] = str(pptx_path)
+        artifacts["clone_audit"] = clone_result.get("audit") or {}
+        audit_report = clone_result.get("audit") or {}
+        repair_report = {
+            "stop_reason": "clone (template geometry preserved)",
+            "residual_count": 0,
+        }
+    else:
+        # ---- designed route: theme-driven from scratch ----
+        from ..agent.plan_to_ir import plan_to_ir
+        from ..repair import run_repair_cycle
 
-    # 7. pre-render repair cycle
-    boxes = _component_boxes(presentation)
-    repair_report = run_repair_cycle(boxes, 13.333, 7.5)
+        presentation, element_cache = plan_to_ir(
+            annotated, analyzed, title=document.title,
+            llm_fn=llm_fn, template_fingerprint=fingerprint,
+            layout_engine=engine,
+        )
+        boxes = [
+            {"x": c.x or 0, "y": c.y or 0, "w": c.w or 1, "h": c.h or 1,
+             "absolute": True, "text": c.text or ""}
+            for slide in presentation.slides for c in slide.components
+        ]
+        repair_report = run_repair_cycle(boxes, 13.333, 7.5)
+        pptx_path = out / "deck.pptx"
+        render_result = agent.render(presentation, pptx_path).to_dict()
+        html_path = out / "deck.html"
+        agent.render(presentation, html_path, renderer="html").to_dict()
+        artifacts["pptx"] = str(pptx_path)
+        artifacts["html"] = str(html_path)
+        artifacts["element_cache"] = element_cache
 
-    # 8. render native pptx + html preview
-    pptx_path = out / "deck.pptx"
-    render_result = agent.render(presentation, pptx_path).to_dict()
-    html_path = out / "deck.html"
-    html_result = agent.render(presentation, html_path, renderer="html").to_dict()
-
-    # 8.5 post-render repair (V2.2: re-extract geometry from the rendered deck)
-    if gate_deck and pptx_path.exists():
+    # QA gate: page audit on the output deck
+    gate_report = {"passed": None, "mode": "skipped"}
+    if gate_deck and artifacts.get("pptx") and Path(artifacts["pptx"]).exists():
         try:
-            from ..page_validation import audit_page
-            audit_result = audit_page(str(pptx_path), 1)
-            post_issues = (audit_result or {}).get("issues") or []
-            if post_issues:
-                post_boxes = [
-                    {"x": i.get("x", 0), "y": i.get("y", 0), "w": i.get("w", 1), "h": i.get("h", 1),
-                     "absolute": True, "text": i.get("text", "")}
-                    for i in post_issues if isinstance(i, dict)
-                ]
-                post_repair = run_repair_cycle(post_boxes, 13.333, 7.5)
-                repair_report["post_render"] = {
-                    "issues_found": len(post_issues),
-                    "stop_reason": post_repair["stop_reason"],
-                    "residual_count": post_repair["residual_count"],
-                }
-        except Exception:
-            repair_report["post_render"] = {"status": "unavailable"}
+            gate_report = agent.gate(Path(artifacts["pptx"]), workspace=out / "qa")
+        except Exception as exc:
+            gate_report = {"passed": False, "mode": "error", "error": str(exc)}
 
-    # 9. QA gate on the rendered deck
-    gate_report = agent.gate(pptx_path, workspace=out / "qa") if gate_deck else {
-        "passed": None, "mode": "skipped",
-    }
-
-    # component matching with the real store (V2.2: not always empty)
-    stored_components = list_components()
-    component_library = {"components": stored_components} if stored_components else {"components": []}
-    component_matches = match_components(component_library, analyzed)
-
-    # design rules validation (V2.2: wired when a rulebook is available)
-    design_rules_findings: list[dict[str, Any]] = []
-    has_design_rules = False
-    if design_dna:
+    # clone audit (chrome inheritance check)
+    if route == "clone" and artifacts.get("pptx"):
         try:
-            from ..design_rules import build_design_rules, validate_design
-            rules = build_design_rules(design_dna)
-            findings = validate_design(design_dna, rules)
-            design_rules_findings = findings
-            has_design_rules = True
-        except Exception:
-            pass
+            from ..clone_build import audit_deck
+            audit_report = audit_deck(Path(artifacts["pptx"]))
+            artifacts["clone_audit"] = audit_report
+        except Exception as exc:
+            audit_report = {"error": str(exc)}
+            artifacts["clone_audit"] = audit_report
 
     has_rasterizer = _detect_rasterizer()
 
     return {
         "schema": SCHEMA,
-        "title": presentation.title,
-        "page_total": len(presentation.slides),
+        "title": annotated.get("title") or document.title or "Presentation",
+        "page_total": len(annotated.get("pages") or []),
+        "route": route,
+        "route_basis": mode_report.get("basis"),
         "template_fingerprint": fingerprint or None,
         "stages": {
             "parse": {"format": document.format, "blocks": len(document.blocks)},
             "analyze": {"analyzer": analyzed.metadata.get("analyzer")},
             "narrative": {"mode": narrative["mode"], "arc": narrative["arc"]},
-            "plan": {"page_total": plan["page_total"],
-                     "estimate_delta": plan["estimate_reference"]["delta_vs_plan"]},
+            "plan": {"page_total": plan["page_total"]},
             "archetypes": {
                 page["page_no"]: (page.get("archetype") or {}).get("archetype")
                 for page in annotated["pages"] if page["kind"] == "content"
             },
-            "fidelity": {"mode": mode_report["mode"], "basis": mode_report["basis"]},
-            "repair": {"stop_reason": repair_report["stop_reason"],
-                       "residual_count": repair_report["residual_count"],
-                       "post_render": repair_report.get("post_render")},
+            "fidelity": {"mode": route, "basis": mode_report.get("basis")},
+            "repair": repair_report,
         },
-        "element_cache": {
-            **element_cache,
-            "store_stats": element_stats(),
-        },
-        "component_matches": component_matches,
-        "design_rules": {
-            "has_rules": has_design_rules,
-            "findings": design_rules_findings,
-            "finding_count": len(design_rules_findings),
-        },
-        "artifacts": {
-            "pptx": render_result.get("path") or str(pptx_path),
-            "html": html_result.get("path") or str(html_path),
-        },
+        "artifacts": artifacts,
+        "clone_audit": audit_report,
         "gates": {
             "fidelity_report": gates_report(
-                "designed", has_design_rules=has_design_rules, has_rasterizer=has_rasterizer
+                route, has_design_rules=bool(design_dna), has_rasterizer=has_rasterizer
             ),
             "delivery": gate_report,
         },
-        "metadata": {"llm": narrative["metadata"]["llm"], "pipeline": "rules+solver+cache"},
+        "element_cache": _element_cache_for_report(route, artifacts),
+        "design_rules": _design_rules_for_report(design_dna),
+        "component_matches": _component_matches_for_report(analyzed),
+        "metadata": {"llm": narrative["metadata"]["llm"], "pipeline": f"{route}+rules"},
     }

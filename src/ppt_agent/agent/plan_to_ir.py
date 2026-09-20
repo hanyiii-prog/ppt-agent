@@ -35,7 +35,7 @@ _PURPOSE_BY_KIND = {
     "closing": "closing",
 }
 
-_DARK_FALLBACK = {"fill": {"type": "solid", "rgb": "0A3A52"}}
+_DEFAULT_PRIMARY = "0A3A52"  # only when NO kind_dna and NO theme available
 
 
 def _component_text(block: Any) -> str | None:
@@ -54,7 +54,7 @@ def _resolve_background(kind: str, kind_dna: dict[str, Any]) -> dict[str, Any]:
     surface = color.get("surface")
     primary = color.get("primary")
     if kind in ("cover", "section", "closing"):
-        rgb = primary or "0A3A52"
+        rgb = primary or _DEFAULT_PRIMARY
         return {"fill": {"type": "solid", "rgb": rgb}}
     rgb = surface or "FFFFFF"
     return {"fill": {"type": "solid", "rgb": rgb}}
@@ -64,7 +64,7 @@ def _resolve_text_color(kind: str, kind_dna: dict[str, Any]) -> str:
     color = (kind_dna.get("color") or {})
     if kind in ("cover", "section", "closing"):
         return color.get("surface") or "FFFFFF"
-    return color.get("text") or "333333"
+    return color.get("text") or "262626"
 
 
 def _element_spec_for_block(block: Any, archetype: str) -> dict[str, Any]:
@@ -130,7 +130,7 @@ def plan_to_ir(
         if kind_dna:
             slide_data["background"] = _resolve_background(kind, kind_dna)
         elif kind in ("cover", "section", "closing"):
-            slide_data["background"] = copy.deepcopy(_DARK_FALLBACK)
+            slide_data["background"] = {"fill": {"type": "solid", "rgb": _DEFAULT_PRIMARY}}
 
         text_color = _resolve_text_color(kind, kind_dna) if kind_dna else None
 

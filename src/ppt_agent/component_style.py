@@ -37,7 +37,7 @@ def resolve_component_style(
 
     if role in ("title", "display"):
         style["font_size"] = scale.get("display") or scale.get("title") or 28.0
-        style["color"] = color.get("primary") or color.get("text") or "0A3A52"
+        style["color"] = color.get("primary") or color.get("text") or "262626"
     elif role in ("subtitle", "heading"):
         style["font_size"] = scale.get("heading") or scale.get("title") or 20.0
         style["color"] = color.get("text") or "333333"
