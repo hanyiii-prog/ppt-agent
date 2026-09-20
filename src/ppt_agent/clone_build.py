@@ -63,8 +63,8 @@ class ChromeFidelityError(ValueError):
 ROLE_BUCKETS: dict[str, tuple[str, ...]] = {
     "cover": ("cover",),
     "toc": ("toc", "content"),
-    "section": ("section",),
-    "content": ("content",),
+    "section": ("section", "content"),
+    "content": ("content", "section"),
     "closing": ("closing", "close", "cover"),
 }
 

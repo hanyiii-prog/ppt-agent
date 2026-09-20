@@ -134,7 +134,7 @@ def test_missing_kit_data_is_named(mini_template, tmp_path):
 
 def test_insufficient_shells_fail_the_plan_up_front(mini_template, tmp_path):
     pages = [{"role": "content", "kit": "quad_cards", "title": f"p{i}",
-              "cards": [{"title": "a", "body": "b"}]} for i in range(5)]
+              "cards": [{"title": "a", "body": "b"}]} for i in range(7)]
     with pytest.raises(CloneBuildError, match="template cannot serve this page plan"):
         render_clone_deck(mini_template, pages, tmp_path / "o.pptx", audit=False)
 
