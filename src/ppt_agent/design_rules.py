@@ -137,12 +137,4 @@ def validate_design(
                         "severity": "low",
                         "detail": f"page {slide_no}: horizontal gap {gap}in deviates from template rhythm {sorted(template_h)}",
                     })
-            for entry in graph["global_dominant"]["horizontal"]:
-                gap = entry["gap_in"]
-                if entry["count"] >= 2 and not any(abs(gap - known) <= max_spacing_deviation_in for known in template_h):
-                    findings.append({
-                        "code": "R-SPACING-001",
-                        "severity": "low",
-                        "detail": f"page {page.get('slide')}: horizontal gap {gap}in deviates from template rhythm {sorted(template_h)}",
-                    })
     return findings

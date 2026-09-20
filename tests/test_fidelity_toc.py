@@ -11,7 +11,7 @@ from ppt_agent.fidelity_repair_executor import execute_repair_plan
 from ppt_agent.fidelity_repair import repair_plan_dict
 from ppt_agent.visual_regression import visual_status
 
-from fidelity_fixtures import build_toc_pptx
+from tests.fidelity_fixtures import build_toc_pptx
 
 
 TOC_VARIANTS = {

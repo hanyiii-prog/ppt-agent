@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ppt_agent.fidelity import extract_fidelity_dna, rotated_bbox_emu
 
-from fidelity_fixtures import EMU_IN, build_rich_pptx
+from tests.fidelity_fixtures import EMU_IN, build_rich_pptx
 
 
 def test_shape_identity_uses_per_kind_c_nv_pr(tmp_path: Path):

@@ -11,7 +11,7 @@ from ppt_agent.clone_build import (  # noqa: E402
     render_clone_deck,
 )
 
-from test_clone_build import _plan, mini_template  # noqa: E402,F401
+from tests.test_clone_build import _plan, mini_template  # noqa: E402,F401
 
 # The clone route keeps the TEMPLATE's page order. mini_template shells are
 # [cover, cover, section, content x4]; the plan maps onto them as:

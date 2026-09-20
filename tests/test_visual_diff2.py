@@ -15,7 +15,7 @@ from ppt_agent.visual_regression import (
     visual_status,
 )
 
-from fidelity_fixtures import build_rich_pptx, mutate_pptx
+from tests.fidelity_fixtures import build_rich_pptx, mutate_pptx
 from ppt_agent.fidelity_model import build_deck_fidelity
 
 

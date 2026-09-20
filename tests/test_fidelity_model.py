@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ppt_agent.fidelity_model import build_deck_fidelity, build_slide_fidelity
 
-from fidelity_fixtures import build_rich_pptx
+from tests.fidelity_fixtures import build_rich_pptx
 
 
 def test_deck_model_covers_every_slide(tmp_path: Path):

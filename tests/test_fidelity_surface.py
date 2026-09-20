@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from fidelity_fixtures import build_rich_pptx, mutate_pptx
+from tests.fidelity_fixtures import build_rich_pptx, mutate_pptx
 
 from ppt_agent.cli import main
 from ppt_agent.mcp.tools import ToolContext, call_tool, tool_names

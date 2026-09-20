@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,11 @@ SCHEMA = "element-store/v1"
 
 def store_dir() -> Path:
     root = Path.home() / ".ppt-agent" / "elements"
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        root = Path(tempfile.gettempdir()) / ".ppt-agent" / "elements"
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 

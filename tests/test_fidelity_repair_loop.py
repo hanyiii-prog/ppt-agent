@@ -11,7 +11,7 @@ from ppt_agent.fidelity_pipeline import (
 )
 from ppt_agent.fidelity_gate import compare_decks
 
-from fidelity_fixtures import build_rich_pptx, mutate_pptx
+from tests.fidelity_fixtures import build_rich_pptx, mutate_pptx
 
 
 def _mutate_multi(tmp_path: Path, mutations: list[str]) -> Path:

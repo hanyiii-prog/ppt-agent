@@ -2,7 +2,7 @@
 import pytest
 
 from ppt_agent.element_store import (
-    clear, fingerprint_element, increment_usage, list_components, lookup, stats, store,
+    clear, fingerprint_element, increment_usage, lookup, stats, store,
 )
 from ppt_agent.element_generator import generate_element, generate_with_cache
 

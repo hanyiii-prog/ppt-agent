@@ -80,7 +80,7 @@ def _detect_special(page: dict[str, Any]) -> str | None:
     if total == 0:
         return None
 
-    if roles.get("_chart", 0) >= 1 or sum(1 for r in layers if str(r.get("element") or "").lower() == "graphicFrame") >= 1:
+    if roles.get("_chart", 0) >= 1 or sum(1 for r in layers if str(r.get("element") or "").lower() == "graphicframe") >= 1:
         return "chart"
 
     pics = roles.get("_pic", 0)

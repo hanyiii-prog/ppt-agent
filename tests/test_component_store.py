@@ -46,7 +46,10 @@ class TestStore:
         assert matches[0]["component_id"] == "a"
 
     def test_find_by_kind_and_count(self):
-        save_component(_make_component("a", "cards_grid"))
+        comp_a = _make_component("a", "cards_grid")
+        comp_a["min_items"] = 2
+        comp_a["max_items"] = 2
+        save_component(comp_a)
         comp = _make_component("b", "cards_grid")
         comp["min_items"] = 3
         comp["max_items"] = 3

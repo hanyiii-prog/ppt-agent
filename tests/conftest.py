@@ -55,3 +55,13 @@ def workspace(tmp_path: Path) -> Path:
 @pytest.fixture()
 def sample_markdown() -> str:
     return SAMPLE_MARKDOWN
+
+
+@pytest.fixture(autouse=True)
+def _isolated_stores(tmp_path, monkeypatch):
+    comp_dir = tmp_path / 'components'
+    elem_dir = tmp_path / 'elements'
+    comp_dir.mkdir(exist_ok=True)
+    elem_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr('ppt_agent.component_store.store_dir', lambda: comp_dir)
+    monkeypatch.setattr('ppt_agent.element_store.store_dir', lambda: elem_dir)

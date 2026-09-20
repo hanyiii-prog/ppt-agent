@@ -8,7 +8,7 @@ from ppt_agent.fidelity_diff import compare_dna
 from ppt_agent.fidelity_repair import repair_plan_dict
 from ppt_agent.fidelity_repair_executor import execute_repair_plan, verify_repair
 
-from fidelity_fixtures import _inject_alpha, build_rich_pptx, mutate_pptx
+from tests.fidelity_fixtures import _inject_alpha, build_rich_pptx, mutate_pptx
 from pptx import Presentation
 from pptx.oxml.ns import qn
 

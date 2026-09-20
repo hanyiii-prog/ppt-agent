@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -41,7 +42,11 @@ SCHEMA = "component-store/v1"
 def store_dir() -> Path:
     """The persistent component store directory (created on demand)."""
     root = Path.home() / ".ppt-agent" / "components"
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        root = Path(tempfile.gettempdir()) / ".ppt-agent" / "components"
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 

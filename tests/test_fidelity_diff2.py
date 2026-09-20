@@ -2,7 +2,7 @@
 from ppt_agent.fidelity_diff import compare_dna, semantic_canonical_xml, semantic_xml_hash
 from ppt_agent.fidelity_repair import plan_from_report
 
-from fidelity_fixtures import build_rich_pptx, mutate_pptx
+from tests.fidelity_fixtures import build_rich_pptx, mutate_pptx
 from ppt_agent.fidelity import extract_fidelity_dna
 
 

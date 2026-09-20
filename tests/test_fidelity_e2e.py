@@ -17,7 +17,7 @@ from ppt_agent.fidelity_gate import compare_decks
 from ppt_agent.fidelity_pipeline import repair_deck
 from ppt_agent.visual_regression import visual_status
 
-from fidelity_fixtures import build_rich_pptx, mutate_pptx
+from tests.fidelity_fixtures import build_rich_pptx, mutate_pptx
 
 
 # --------------------------------------------------------------------------- #
