@@ -257,13 +257,47 @@ def run_pipeline(
     annotated = annotate_plan(plan, analyzed)
 
     artifacts: dict[str, Any] = {}
+    pages_dropped = 0
     repair_report: dict[str, Any] = {}
     audit_report: dict[str, Any] = {}
 
     if route == "clone" and template_path:
         # ---- clone route: template chrome inherited verbatim ----
-        from ..clone_build import render_clone_deck
+        from ..clone_build import render_clone_deck, plan_template
 
+        # capacity check: limit pages to what the template can serve
+        template_plan = plan_template(template_path)
+        shells = template_plan.get("shells") or {}
+        max_content = (shells.get("content") or 0) + (shells.get("toc") or 0)
+        max_section = shells.get("section") or 0
+        max_cover = shells.get("cover") or 0
+        max_closing = shells.get("closing") or shells.get("close") or shells.get("cover") or 0
+        
+        original_total = len(annotated.get("pages") or [])
+        content_used = 0
+        section_used = 0
+        limited_pages = []
+        for pg in annotated.get("pages") or []:
+            kind = pg.get("kind")
+            if kind == "content":
+                if content_used >= max_content:
+                    continue
+                content_used += 1
+            elif kind == "section":
+                if section_used >= max_section:
+                    continue
+                section_used += 1
+            elif kind == "cover":
+                if max_cover < 1:
+                    continue
+            elif kind == "closing":
+                if max_closing < 1:
+                    continue
+            limited_pages.append(pg)
+        annotated["pages"] = limited_pages
+        annotated["page_total"] = len(limited_pages)
+        pages_dropped = original_total - len(limited_pages)
+        
         pptx_path = out / "deck.pptx"
         clone_pages = _plan_to_clone_pages(annotated, document)
         clone_result = render_clone_deck(
@@ -328,6 +362,7 @@ def run_pipeline(
         "route": route,
         "route_basis": mode_report.get("basis"),
         "template_fingerprint": fingerprint or None,
+        "pages_dropped": pages_dropped,
         "stages": {
             "parse": {"format": document.format, "blocks": len(document.blocks)},
             "analyze": {"analyzer": analyzed.metadata.get("analyzer")},
