@@ -60,6 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--facts", type=Path, help="Fact JSON (array of {claim, source_id, locator}) for the fact lock")
     build.add_argument("--preview", action="store_true", help="Also rasterise the deck to PNG page previews")
     build.add_argument("--preview-dpi", type=float, default=96.0, help="Preview resolution (default 96)")
+    build.add_argument("--assets", type=Path, help="Directory of reusable images (logos, cover photo) for the clone route")
+    build.add_argument("--design-plan", type=Path, help="JSON page-plan (list or {pages:[...]}) that overrides the auto planner on the clone route")
+    build.add_argument("--route", choices=["auto", "clone", "designed"], default="auto",
+                       help="Force the generation route; auto prefers clone when --template is given")
 
     caps = sub.add_parser("capabilities", help="Print the contract, host capabilities and renderer inventory")
     caps.add_argument("--host", help="Host profile: codex, workbuddy, doubao, claude, chatgpt")
@@ -246,6 +250,46 @@ def main() -> int:
     if args.command == "build":
         agent = _agent()
         facts = json.loads(args.facts.read_text(encoding="utf-8")) if args.facts else None
+        route_flag = getattr(args, "route", "auto")
+        use_pipeline = (route_flag == "clone") or (route_flag == "auto" and args.template and not args.ir)
+        if use_pipeline:
+            from .agent.pipeline import run_pipeline
+            if not args.source:
+                raise SystemExit("clone route requires a Markdown source")
+            design_plan = None
+            if args.design_plan:
+                design_plan = json.loads(args.design_plan.read_text(encoding="utf-8-sig"))
+            report = run_pipeline(
+                args.source.read_text(encoding="utf-8"),
+                out_dir=args.out_dir,
+                template_path=args.template,
+                design_plan=design_plan,
+                assets_dir=getattr(args, "assets", None),
+                gate_deck=not args.no_gate,
+            )
+            _write_json(Path(args.out_dir) / f"{args.stem}-pipeline.json", report)
+            pptx_out = (report.get("artifacts") or {}).get("pptx")
+            route_used = report.get("route")
+            dp_src = (report.get("design_plan") or {}).get("source")
+            print(f"route : {route_used} (design_plan={dp_src})")
+            if report.get("fallback_reason"):
+                fb = report["fallback_reason"]
+                print(f"DEGRADED: clone route failed and fell back to designed: {fb}")
+            if pptx_out:
+                print(f"pptx  : {pptx_out}")
+            gate = (report.get("gates") or {}).get("delivery") or {}
+            if gate and gate.get("passed") is not None:
+                verdict = "PASS" if gate.get("passed") else "FAIL"
+                print(f"gate  : {verdict}")
+            elif gate:
+                print(f"gate  : {gate.get("mode", "skipped")}")
+            if args.preview and pptx_out:
+                from .preview import rasterize_pptx
+                pv = rasterize_pptx(pptx_out, Path(args.out_dir) / f"{args.stem}-preview", dpi=args.preview_dpi)
+                msg = f"preview: {len(pv)} page(s) -> {pv[0].parent}" if pv else "preview: no pages"
+                print(msg)
+            ok = bool(pptx_out) and route_used != "designed" and not report.get("fallback_reason")
+            return 0 if ok else 2
         outcome = agent.build(
             out_dir=args.out_dir,
             markdown=None if args.ir else args.source.read_text(encoding="utf-8"),

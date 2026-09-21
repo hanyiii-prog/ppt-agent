@@ -80,74 +80,83 @@ def condense_plan(
     *,
     max_total: int = MAX_TOTAL_PAGES,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Intelligently limit the plan to <= max_total pages."""
+    """Limit the plan to <= ``max_total`` pages WITHOUT losing the narrative.
+
+    Red line: every chapter's section spine is preserved. The old strategy
+    deleted whole low-priority chapters, which turned a four-part report into a
+    one-chapter deck with an empty TOC. Instead we now:
+
+    1. keep cover / toc / closing and *all* section pages;
+    2. hand out the remaining content budget to chapters in proportion to how
+       many content pages they generated, guaranteeing each chapter at least
+       one content page where possible;
+    3. within a chapter, drop the lowest-value content pages first (hard
+       numbers and tables are worth most).
+    """
     condensed = _copy.deepcopy(plan)
     pages = condensed.get("pages") or []
     original_total = len(pages)
-    fixed = sum(1 for p in pages if p.get("kind") in ("cover", "toc", "closing"))
-    budget = max_total - fixed
 
+    fixed = [p for p in pages if p.get("kind") in ("cover", "toc", "closing")]
     sections = [p for p in pages if p.get("kind") == "section"]
     contents = [p for p in pages if p.get("kind") == "content"]
 
-    if len(sections) + len(contents) <= budget:
+    section_budget = len(fixed) + len(sections)
+    content_budget = max(0, max_total - section_budget)
+
+    if len(contents) <= content_budget:
         return condensed, {"original": original_total, "final": len(pages),
-                           "sections_merged": 0, "pages_dropped": 0,
-                           "strategy": "within budget"}
+                           "max_total": max_total, "sections_merged": 0,
+                           "pages_dropped": 0, "strategy": "within budget"}
 
     block_lookup = {b.id: b for b in document.blocks}
 
-    # rank sections by content volume (ascending = least important first)
-    section_volume: dict[str, float] = {}
-    for section in sections:
-        title = section.get("title") or ""
-        vol = sum(
-            block_lookup[bid].char_volume()
-            for bid in section.get("source_blocks") or [] if bid in block_lookup
-        )
-        vol += sum(1 for p in contents if p.get("title") == title)
-        section_volume[title] = vol
+    def content_value(pg: dict[str, Any]) -> float:
+        blocks = [block_lookup.get(bid) for bid in pg.get("source_blocks") or []]
+        metrics = sum(1 for b in blocks if b and b.text and any(c.isdigit() for c in b.text))
+        tables = sum(1 for b in blocks if b and b.type == "table")
+        return metrics + tables * 3 + len(pg.get("source_blocks") or [])
 
-    keep_sections = list(sections)
-    merged_count = 0
-    while len(keep_sections) > 1:
-        section_titles = {s.get("title") for s in keep_sections}
-        section_cost = len(keep_sections)
-        content_cost = sum(1 for p in contents if p.get("title") in section_titles)
-        if section_cost + content_cost <= budget:
-            break
-        smallest = min(keep_sections, key=lambda s: section_volume.get(s.get("title") or "", 0))
-        keep_sections.remove(smallest)
-        merged_count += 1
+    def section_of(pg: dict[str, Any]) -> str:
+        return pg.get("title") or ""
 
-    keep_titles = {s.get("title") for s in keep_sections}
-    new_pages = [p for p in pages if p.get("kind") in ("cover", "toc", "closing")]
-    for p in pages:
-        if p.get("kind") in ("section", "content") and p.get("title") in keep_titles:
-            new_pages.append(p)
+    by_section: dict[str, list[dict[str, Any]]] = {}
+    for pg in contents:
+        by_section.setdefault(section_of(pg), []).append(pg)
 
-    # cap content pages by value (hard numbers + tables are more valuable)
-    content_in_kept = [p for p in new_pages if p.get("kind") == "content"]
-    available = budget - len(keep_sections)
-    if len(content_in_kept) > available:
-        def content_value(pg):
-            blocks = [block_lookup.get(bid) for bid in pg.get("source_blocks") or []]
-            metrics = sum(1 for b in blocks if b and b.text and any(c.isdigit() for c in b.text))
-            tables = sum(1 for b in blocks if b and b.type == "table")
-            return metrics + tables * 3 + len(pg.get("source_blocks") or [])
-        content_in_kept.sort(key=content_value, reverse=True)
-        keep_ids = {id(p) for p in content_in_kept[:max(0, available)]}
-        new_pages = [p for p in new_pages if p.get("kind") != "content" or id(p) in keep_ids]
+    # proportional quota per chapter, then rebalance leftover capacity
+    n_sections = max(1, len(by_section))
+    remaining = content_budget
+    quota: dict[str, int] = {}
+    order = sorted(by_section, key=lambda t: len(by_section[t]), reverse=True)
+    for i, title in enumerate(order):
+        available_sections = len(order) - i
+        pool = by_section[title]
+        # fair share of what is left, but never starve later chapters
+        share = max(1, round(remaining / available_sections))
+        take = min(share, len(pool), remaining)
+        quota[title] = take
+        remaining -= take
 
+    keep_ids: set[int] = set()
+    dropped_pages = 0
+    for title, pool in by_section.items():
+        allowance = quota.get(title, 0)
+        ranked = sorted(pool, key=content_value, reverse=True)
+        keep = ranked[:allowance]
+        dropped_pages += len(pool) - len(keep)
+        keep_ids.update(id(p) for p in keep)
+
+    new_pages = [p for p in pages if p.get("kind") != "content" or id(p) in keep_ids]
     new_pages.sort(key=lambda p: p.get("page_no") or 0)
     condensed["pages"] = new_pages
     condensed["page_total"] = len(new_pages)
-    dropped = original_total - len(new_pages)
 
     return condensed, {
         "original": original_total, "final": len(new_pages), "max_total": max_total,
-        "sections_merged": merged_count, "pages_dropped": dropped,
-        "strategy": "merged low-priority sections + capped content pages",
+        "sections_merged": 0, "pages_dropped": dropped_pages,
+        "spine_sections": len(sections),
+        "strategy": "kept every chapter spine; trimmed lowest-value content pages",
     }
 
 
@@ -270,9 +279,10 @@ def _blocks_to_two_panel(blocks: list) -> tuple[dict, dict]:
     return left, right
 
 
-def _blocks_to_stages(blocks: list) -> list[dict[str, str]]:
+def _blocks_to_stages(blocks: list, *, page_title: str = "") -> list[dict[str, str]]:
     """Format for stage_cards: {"head", "desc"}"""
-    stages = []
+    stages: list[dict[str, str]] = []
+    pt = (page_title or "").strip()
     for block in blocks:
         if block.type in ("bullets", "ordered") and block.items:
             for item in block.items:
@@ -283,8 +293,48 @@ def _blocks_to_stages(blocks: list) -> list[dict[str, str]]:
                 desc = parts[1].strip() if len(parts) > 1 else item
                 stages.append({"head": head, "desc": desc})
         elif block.text:
+            if pt and block.text.strip() == pt:
+                continue
             stages.append({"head": block.text[:10], "desc": block.text})
     return stages
+
+
+_DATE_RE = __import__("re").compile(
+    r"(20\d{2})[\s年./-]{0,2}(\d{1,2})?[\s月./-]{0,2}(\d{1,2})?[日号]?"
+)
+
+
+def _derive_cover_meta(document) -> str:
+    """Best-effort date string pulled from the document body.
+
+    Returns "" when nothing date-shaped is found. Never fabricates a
+    date; the caller draws nothing in that case, which is correct.
+    """
+    for block in document.blocks[:20]:
+        text = block.text or " ".join(block.items or [])
+        m = _DATE_RE.search(text)
+        if m and m.group(1) and 1900 < int(m.group(1)) < 2100:
+            year = m.group(1)
+            month = m.group(2)
+            day = m.group(3)
+            parts = [year + "年"]
+            if month:
+                parts.append(month + "月")
+            if day:
+                parts.append(day + "日")
+            return " ".join(parts)
+    return ""
+
+
+def _coerce_design_plan(plan):
+    """Accept either a raw page list or a ``{deck, meta, pages}`` envelope."""
+    if isinstance(plan, list):
+        return plan
+    if isinstance(plan, dict):
+        pages = plan.get("pages")
+        if isinstance(pages, list):
+            return pages
+    raise ValueError("design_plan must be a list of page specs or a dict with a pages list")
 
 
 def _plan_to_clone_pages(
@@ -312,9 +362,9 @@ def _plan_to_clone_pages(
         if kind == "cover":
             pages.append({
                 "role": "cover",
-                "pill": "汇报",
+                "pill": page.get("pill") or "",
                 "title": page.get("title") or doc_title,
-                "meta": "2026年9月",
+                "meta": page.get("meta") or _derive_cover_meta(document),
             })
         elif kind == "toc":
             items = []
@@ -392,7 +442,7 @@ def _plan_to_clone_pages(
                 spec["left"] = left
                 spec["right"] = right
             elif kit == "stage_cards":
-                spec["stages"] = _blocks_to_stages(blocks)
+                spec["stages"] = _blocks_to_stages(blocks, page_title=page_title)
             else:
                 spec["cards"] = _blocks_to_column_cards(blocks, page_title=page_title)
             pages.append(spec)
@@ -414,6 +464,8 @@ def run_pipeline(
     template_path: str | Path | None = None,
     template_dna: dict[str, Any] | None = None,
     design_dna: dict[str, Any] | None = None,
+    design_plan: list[dict[str, Any]] | dict[str, Any] | None = None,
+    assets_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Markdown -> delivered deck + the full decision report."""
     agent = agent or PptAgent()
@@ -421,6 +473,15 @@ def run_pipeline(
     out.mkdir(parents=True, exist_ok=True)
 
     has_template = template_path is not None and Path(template_path).exists()
+    if has_template and not template_dna:
+        # A template was supplied but no DNA was pre-extracted: derive it here
+        # so the clone route engages instead of silently falling to the
+        # designed path. This is the single source of the template identity.
+        from ..template import analyze_pptx
+        template_dna = analyze_pptx(Path(template_path))
+    if has_template and not design_dna:
+        from ..design_dna import build_design_dna
+        design_dna = build_design_dna(template_dna)
     mode_report = resolve_fidelity_mode(
         None if has_template else "designed",
         template_dna=template_dna if has_template else None,
@@ -441,13 +502,16 @@ def run_pipeline(
         "strategy": "no condensation needed", "pages_dropped": 0,
     }
 
+    # Page budget is driven by the content, not by how many template slides
+    # exist: the clone route renders every page on Blank layouts with DNA-
+    # inherited chrome, so it can author any number of pages. The old
+    # "2 + template shells" cap belonged to the verbatim shell-reuse route
+    # and wrongly collapsed decks to ~11 pages; MAX_TOTAL_PAGES (<=25) is the
+    # only real ceiling, per the design brief.
     max_total = MAX_TOTAL_PAGES
-    if route == "clone" and template_path:
-        from ..clone_build import plan_template
-        tp = plan_template(template_path)
-        shells = tp.get("shells") or {}
-        inner = (shells.get("content") or 0) + (shells.get("section") or 0) + (shells.get("toc") or 0)
-        max_total = min(max_total, 2 + inner)
+    if design_plan:
+        # An externally designed plan is authoritative -- do not condense it.
+        max_total = max(max_total, len(design_plan if isinstance(design_plan, list) else design_plan.get("pages") or []))
 
     if len(plan.get("pages") or []) > max_total:
         plan, condensation_report = condense_plan(plan, document, max_total=max_total)
@@ -460,13 +524,21 @@ def run_pipeline(
     audit_report: dict[str, Any] = {}
     fallback_reason: str | None = None
 
+    design_plan_source = "auto"
+    rendered_pages: int | None = None
     if route == "clone" and template_path:
         from ..blank_deck import render_blank_deck
         pptx_path = out / "deck.pptx"
-        clone_pages = _plan_to_clone_pages(annotated, document)
+        if design_plan:
+            clone_pages = _coerce_design_plan(design_plan)
+            design_plan_source = "external"
+        else:
+            clone_pages = _plan_to_clone_pages(annotated, document)
         try:
-            clone_result = render_blank_deck(clone_pages, pptx_path, design_dna=design_dna)
+            clone_result = render_blank_deck(clone_pages, pptx_path, design_dna=design_dna,
+                                      assets_dir=assets_dir)
             artifacts["pptx"] = str(pptx_path)
+            rendered_pages = int(clone_result.get("pages") or len(clone_pages))
             artifacts["clone_audit"] = {"warnings": clone_result.get("warnings", [])}
             audit_report = {"warnings": clone_result.get("warnings", [])}
             repair_report = {"stop_reason": "clone (blank layout)", "residual_count": 0}
@@ -517,7 +589,7 @@ def run_pipeline(
     return {
         "schema": SCHEMA,
         "title": annotated.get("title") or document.title or "Presentation",
-        "page_total": len(annotated.get("pages") or []),
+        "page_total": rendered_pages if rendered_pages is not None else len(annotated.get("pages") or []),
         "route": route,
         "route_basis": mode_report.get("basis"),
         "fallback_reason": fallback_reason,
@@ -535,6 +607,7 @@ def run_pipeline(
             "fidelity": {"mode": route, "basis": mode_report.get("basis")},
             "repair": repair_report,
         },
+        "design_plan": {"source": design_plan_source},
         "artifacts": artifacts,
         "clone_audit": audit_report,
         "element_cache": _element_cache_for_report(route, artifacts),

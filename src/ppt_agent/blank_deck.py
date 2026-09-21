@@ -233,6 +233,30 @@ def _round(slide, x: float, y: float, w: float, h: float, *,
     return sh
 
 
+_EMPHASIS_RE = __import__("re").compile(r"\*\*(.+?)\*\*|__(.+?)__")
+_CODE_RE = __import__("re").compile(r"`([^`]*)`")
+
+
+def _strip_md(text):
+    """Remove inline markdown emphasis so raw `**...**` never reaches a slide.
+
+    Handles paired emphasis (``**a**`` -> ``a``) and the common half-marker
+    shape (``**a`` or ``a**``) left by source bullets that open bold without
+    closing it, plus a bare code fence (``a``)."""
+    if not isinstance(text, str) or not text:
+        return text
+    prev = None
+    while prev != text:
+        prev = text
+        text = _EMPHASIS_RE.sub(lambda m: m.group(1) or m.group(2) or "", text)
+    text = _CODE_RE.sub(lambda m: m.group(1), text)
+    # drop unpaired emphasis markers (source often writes '- **标题' with no close)
+    text = text.replace("**", "").replace("__", "")
+    # also drop a trailing lone '*' left over from bullet syntax
+    text = text.strip().rstrip("*").rstrip("_") if text.strip() in ("*", "**", "_") else text
+    return text
+
+
 def _tb(slide, x: float, y: float, w: float, h: float, lines, *, t: Theme,
         size: int = 11, color: str | None = None, bold: bool = False,
         align: PP_ALIGN = PP_ALIGN.LEFT, anchor: MSO_ANCHOR = MSO_ANCHOR.TOP,
@@ -248,7 +272,8 @@ def _tb(slide, x: float, y: float, w: float, h: float, lines, *, t: Theme,
     tf.vertical_anchor = anchor
     tf.margin_left = tf.margin_right = 0
     tf.margin_top = tf.margin_bottom = 0
-    for i, line_text in enumerate(lines):
+    for i, raw_line in enumerate(lines):
+        line_text = _strip_md(raw_line)
         if i > 0:
             tf.add_paragraph()
         p = tf.paragraphs[i]
@@ -371,15 +396,17 @@ def draw_cover(slide, *, t: Theme, pill: str = "汇报", title: str = "",
     if win.exists():
         slide.shapes.add_picture(str(win), Inches(LOGO_W[0]), Inches(LOGO_W[1]),
                                   Inches(LOGO_W[2]), Inches(LOGO_W[3]))
-    # pill
-    pill_shape = _grad_box(slide, 4.38, 4.81, 4.87, 0.61, t.grad1,
-                            MSO_SHAPE.ROUNDED_RECTANGLE)
-    try:
-        pill_shape.adjustments[0] = 0.10
-    except Exception:
-        pass
-    _tb(slide, 4.67, 4.91, 4.29, 0.40, pill, t=t, size=24, color=t.white,
-        bold=True, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+    # pill (skip entirely when there is no label text -- no empty box)
+    pill = _strip_md(pill)
+    if pill:
+        pill_shape = _grad_box(slide, 4.38, 4.81, 4.87, 0.61, t.grad1,
+                                MSO_SHAPE.ROUNDED_RECTANGLE)
+        try:
+            pill_shape.adjustments[0] = 0.10
+        except Exception:
+            pass
+        _tb(slide, 4.67, 4.91, 4.29, 0.40, pill, t=t, size=24, color=t.white,
+            bold=True, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
     # title (single or multi-line, centred)
     if title:
         _tb(slide, 1.11, 5.62, 11.41, 1.20, title.splitlines() or [title], t=t,
