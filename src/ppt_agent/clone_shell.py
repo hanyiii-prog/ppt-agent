@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """clone_shell -- template-page cloning renderer for ppt-agent.
 
 Why this exists
@@ -63,7 +63,8 @@ EMU_PER_INCH = 914400.0
 __all__ = ["CloneShell", "classify_shells", "clear_body", "set_title",
            "ShellExhausted", "audit_pages", "gradient_fill", "DEFAULT_ROLES",
            "set_geom", "copy_logos", "add_content_chrome", "rebuild_cover",
-           "rebuild_closing",
+           "slide_foreground",
+    "rebuild_section", "rebuild_toc", "rebuild_closing",
            "box", "CHROME_BAR", "CHROME_DOT1", "CHROME_DOT2",
            "set_xfrm", "shape_rot", "rotated_bbox", "clone_shape",
            "layout_chrome", "layout_placeholder_text", "drop_empty_placeholders"]
@@ -83,20 +84,147 @@ DEFAULT_ROLES: tuple[tuple[str, str], ...] = (
 )
 
 
+def _layout_has_body_slot(layout) -> bool:
+    """True when ``layout`` ships a non-title authoring placeholder.
+
+    A *content* layout is built to be filled: it exposes a body / content
+    placeholder (``idx != 0``) that authors click into. Divider, section and
+    table-of-contents layouts are hand-composed decorations with no such slot.
+    This is a structural signal -- it holds for any template without matching a
+    single literal string, and it is what the layout-name tokens below cannot
+    express for templates whose layouts are named ``1_导航页版式`` etc.
+    """
+    for sh in getattr(layout, "shapes", ()):
+        try:
+            if sh.is_placeholder and int(sh.placeholder_format.idx) != 0:
+                return True
+        except (AttributeError, ValueError, TypeError):
+            continue
+    return False
+
+
+def _repeated_field_count(slide) -> int:
+    """Largest cluster of same-font-size text boxes on ``slide``.
+
+    A table of contents is the one hand-composed page that repeats a *list* of
+    equal fields -- several chapter titles at one size, several index numbers at
+    another. A section divider carries a single heading instead, so every size
+    appears once. The biggest repeat count therefore reads >=2 for a TOC and 1
+    for a divider, without matching any text or layout-name literal.
+    """
+    sizes: list[int] = []
+    for sh in _iter_text_shapes(slide):
+        pt = _font_size_pt(sh)
+        if pt:
+            sizes.append(int(round(pt)))
+    if not sizes:
+        return 0
+    return max(Counter(sizes).values())
+
+
 def classify_shells(prs: Presentation,
                     role_map: Sequence[tuple[str, str]] = DEFAULT_ROLES
                     ) -> dict[str, list[int]]:
-    """Bucket slide indices by role using their layout name."""
+    """Bucket slide indices by role.
+
+    Two passes, both literal-free where the layout name is unhelpful:
+
+    1. *Name* -- match ``role_map`` substrings (``章节`` / ``目录`` / ...).
+    2. *Structure* -- layouts whose name matches nothing are content when they
+       carry an authoring body slot, otherwise decorative; the single decorative
+       layout with a repeated title cluster is the table of contents and the
+       remaining decorative layouts are section dividers.
+    """
+    slides = list(prs.slides)
     buckets: dict[str, list[int]] = {}
-    for i, slide in enumerate(prs.slides):
+    unmatched: list[int] = []                      # slide idx whose name told us nothing
+    for i, slide in enumerate(slides):
         name = slide.slide_layout.name or ""
-        role = "content"
         for key, r in role_map:
             if key in name:
-                role = r
+                buckets.setdefault(r, []).append(i)
                 break
-        buckets.setdefault(role, []).append(i)
-    return buckets
+        else:
+            unmatched.append(i)
+
+    # structural fallback: split unmatched layouts into content vs decorative
+    content_idxs: list[int] = []
+    decor_by_layout: dict[int, list[int]] = {}     # layout id -> slide idxs
+    for i in unmatched:
+        layout = slides[i].slide_layout
+        if _layout_has_body_slot(layout):
+            content_idxs.append(i)
+        else:
+            decor_by_layout.setdefault(id(layout), []).append(i)
+
+    buckets.setdefault("content", []).extend(content_idxs)
+
+    # Among decorative layouts, the one whose slides repeat equal-font fields
+    # (a list of chapter titles / index numbers) is the table of contents; the
+    # rest are section dividers. Highest repeat wins so a deck with a single
+    # decorative layout never invents a TOC from a lone divider.
+    def _score(lid: int) -> int:
+        idxs = decor_by_layout[lid]
+        return max(_repeated_field_count(slides[i]) for i in idxs)
+
+    toc_layout = None
+    best = 1                                        # need >=2 repeated fields for a TOC
+    for lid in decor_by_layout:
+        if _score(lid) > best:
+            best, toc_layout = _score(lid), lid
+    for lid, idxs in decor_by_layout.items():
+        role = "toc" if lid == toc_layout else "section"
+        buckets.setdefault(role, []).extend(idxs)
+
+    # Positional fallback for templates that carry NO role signal at all --
+    # every slide sits on the plain "Blank" layout with the design baked onto
+    # the slide (a common shape for machine-generated or heavily flattened
+    # decks). Neither the layout name nor the body-slot / repeat-field signals
+    # distinguish the pages, so we fall back to the one universal convention:
+    # the deck opens on a cover and closes on a thank-you. We only *lift* a
+    # slide the name/structural passes parked in the generic content bucket,
+    # so a real divider or TOC is never stolen, and never on a one-slide deck.
+    content_bucket = buckets.get("content", [])
+
+    def _lift(idx: int, role: str, aliases=()) -> None:
+        if any(idx in buckets.get(r, []) for r in (role,) + tuple(aliases)):
+            return
+        if idx not in content_bucket:
+            return
+        buckets.setdefault(role, []).append(idx)
+        buckets["content"] = [i for i in buckets["content"] if i != idx]
+
+    # Only fire when the name and structural passes found NO role at all (the
+    # sole bucket is generic content) -- a deck that already names a cover or
+    # divider is never second-guessed by position.
+    if len(slides) > 2 and set(buckets) <= {"content", "section", "toc"}:
+        _lift(0, "cover")
+        _lift(len(slides) - 1, "close", aliases=("closing",))
+
+    # A title-layout slide that sits at the tail of the deck is a thank-you /
+    # closing page, not another cover -- the deck opens on its cover and closes
+    # on the same layout. Only split when the template gave no explicit closing
+    # role and the cover pool has more than one slide; we keep the earliest as
+    # the cover and park the rest as closings. Literal-free (position + count).
+    cover_idx = buckets.get("cover", [])
+    if (len(cover_idx) >= 2 and not buckets.get("closing")
+            and not buckets.get("close")):
+        # Only the covers that sit *after* every other role are tail closers
+        # (the deck reuses the title layout to say thank-you). Covers grouped
+        # at the head -- alternate first slides a designer left in the template
+        # -- stay in the cover pool. Literal-free: pure position + count.
+        last_other = -1
+        for role, idxs in buckets.items():
+            if role == "cover":
+                continue
+            for i in idxs:
+                last_other = max(last_other, i)
+        closers = [i for i in cover_idx if i > last_other]
+        if closers and len(closers) < len(cover_idx):
+            buckets["cover"] = [i for i in cover_idx if i <= last_other]
+            buckets["close"] = closers
+
+    return {r: sorted(v) for r, v in buckets.items() if v}
 
 
 # ---------------------------------------------------------------------------
@@ -480,8 +608,13 @@ def add_content_chrome(slide, *, prs=None, bar_hex: str = CHROME_BAR,
         clear_body(slide)
     if not force:
         inv = layout_chrome(slide)
-        if inv["bar"] and inv["pictures"]:
-            return 0                       # layout already paints the chrome
+        # Inherit whenever the layout already paints ANY header chrome. A
+        # minimal template (logos but no coloured band) is a deliberate design
+        # choice -- synthesising a blue bar there injects a foreign accent that
+        # violates the template DNA. Only an entirely chrome-less layout needs a
+        # synthetic header, which the caller forces for synthetic shells.
+        if inv["bar"] or inv["pictures"]:
+            return 0                       # layout already owns the header look
     box(slide, 0, 0, width_in, 0.71, bar_hex)
     for (lx, ly, sz) in [(-0.20, 0.10, 0.46), (0.10, 0.31, 0.27)]:
         d = box(slide, lx, ly, sz, sz, CHROME_DOT1, MSO_SHAPE.OVAL)
@@ -491,101 +624,431 @@ def add_content_chrome(slide, *, prs=None, bar_hex: str = CHROME_BAR,
     return 4
 
 
-def rebuild_cover(slide, *, prs=None, pill_text: str = "天津市口腔医院",
-                  title_text: str = "", meta_text: str = "",
-                  bar_hex: str = CHROME_BAR, font: str = "思源雅黑") -> None:
-    """Rebuild a cover with correct z-order by cloning the template's own
-    chrome, then injecting title/meta on top:
+def _strip_md(text):
+    """Strip inline markdown emphasis so raw ** markers never reach a slide."""
+    import re as _re
+    if not isinstance(text, str) or not text:
+        return text
+    prev = None
+    while prev != text:
+        prev = text
+        text = _re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+        text = _re.sub(r"\*\*", "", text)
+        text = _re.sub(r"(?<![\w])\*(?![\s])(.+?)(?<![\s])\*(?![\w])", r"\1", text)
+        text = _re.sub(r"(?<![\w])\*(?![\s])(.+)", r"\1", text)
+        text = _re.sub(r"(.+)\*(?![\w])", r"\1", text)
+        text = text.replace("`", "")
+    return text
 
-        background photo -> 2 blue freeform bands -> 2 logos -> pill
-        (rounded-rect, white label) -> 44pt title -> bottom meta
 
-    Fixes the V6 bug where the LOGO was drawn last (on top of the title) and
-    "天津市口腔医院" was wrongly merged into the 44pt title. The pill is a
-    separate ``round2DiagRect`` element so it never collides with the title.
+def _inplace_text(slide, old_markers, new_text, *, multi=False):
+    """Replace the contents of the template shell's OWN text box that matches
+    any marker substring, preserving geometry, font, colour, size, alignment
+    and bold. Returns True when a box was rewritten.
+
+    Clone-route contract for cover/closing: edit the template's text, never
+    wipe-and-redraw. Redrawing synthesises chrome (pills, bands, centred
+    titles, photos) the template cover may not even have, which is exactly the
+    fidelity regression these two pages kept hitting.
     """
-    import io
-    bg_blob = None
-    bands = []
-    for sh in list(slide.shapes):
-        if sh.shape_type == 13 and sh.top is not None and sh.top / EMU_PER_INCH < 0:
-            bg_blob = sh.image.blob
-        if "FREEFORM" in str(sh.shape_type):
-            bands.append(copy.deepcopy(sh._element))
-    for sh in list(slide.shapes):
-        sh._element.getparent().remove(sh._element)
-    if bg_blob:
-        slide.shapes.add_picture(io.BytesIO(bg_blob), 0, Inches(-0.07),
-                                  Inches(13.333), Inches(4.72))
-    for bx in bands:
-        slide.shapes._spTree.append(bx)
-    copy_logos(slide, prs=prs)
-    pill = box(slide, 4.38, 4.81, 4.87, 0.61, bar_hex, MSO_SHAPE.ROUNDED_RECTANGLE)
+    if not new_text:
+        return False
+    for sh in slide.shapes:
+        if not (sh.has_text_frame and sh.text_frame.text.strip()):
+            continue
+        if any(m and m in sh.text_frame.text for m in old_markers):
+            tf = sh.text_frame
+            lines = new_text.splitlines() if multi else [new_text]
+            p0 = tf.paragraphs[0]
+            if p0.runs:
+                p0.runs[0].text = lines[0]
+                for r in p0.runs[1:]:
+                    r.text = ""
+            else:
+                r = p0.add_run(); r.text = lines[0]
+            first_src = tf.paragraphs[0].runs[0] if tf.paragraphs[0].runs else None
+            for extra in lines[1:]:
+                np = tf.add_paragraph()
+                nr = np.add_run(); nr.text = extra
+                if first_src is not None:
+                    nr.font.size = first_src.font.size
+                    nr.font.bold = first_src.font.bold
+                    nr.font.name = first_src.font.name
+                    try:
+                        nr.font.color.rgb = first_src.font.color.rgb
+                    except Exception:
+                        pass
+            return True
+    return False
+
+
+def _iter_text_shapes(slide):
+    for sh in slide.shapes:
+        try:
+            if sh.has_text_frame and sh.text_frame.text.strip():
+                yield sh
+        except Exception:
+            continue
+
+
+def _font_size_pt(sh):
+    """Largest run font size (pt) in a text shape; 0 when undefined."""
+    best = 0.0
     try:
-        pill.adjustments[0] = 0.10
+        for para in sh.text_frame.paragraphs:
+            for run in para.runs:
+                if run.font.size:
+                    best = max(best, run.font.size.pt)
     except Exception:
-        pass
-    gradient_fill(pill, [(0, "0C67BC"), (100, "1687F1")])
-    set_geom(pill, "round2DiagRect")
-    _cover_text(slide, 4.67, 4.91, 4.29, 0.40, MSO_ANCHOR.MIDDLE,
-                pill_text, 24, "FFFFFF", bold=True, font=font)
-    if title_text:
-        _cover_text(slide, 1.11, 5.58, 11.41, 0.89, MSO_ANCHOR.MIDDLE,
-                    title_text, 44, "0D64BF", bold=True, font=font)
-    if meta_text:
-        _cover_text(slide, 2.50, 6.56, 8.64, 0.36, MSO_ANCHOR.MIDDLE,
-                    meta_text, 16, "0D64BF", font=font, align=PP_ALIGN.CENTER)
+        return 0.0
+    return best
 
 
-def rebuild_closing(slide, *, prs=None, title_text: str = "", sub_text: str = "",
-                    meta_text: str = "", font: str = "思源雅黑",
-                    title_size: int = 36, sub_size: int = 18,
-                    meta_size: int = 13, title_color: str = "0D64BF",
-                    sub_color: str = "0D64BF", meta_color: str = "68737F") -> None:
-    """Rebuild a closing page by **reusing the shell's own media**, never by
-    redrawing it.
+def _shape_style(sh):
+    """Capture the dominant run style (size/bold/name/colour) of a shape so it
+    can be re-applied after the box is cleared. ``None`` fields fall back to the
+    box's own defaults, which keeps the inherited template DNA."""
+    model = None
+    for para in sh.text_frame.paragraphs:
+        if para.runs:
+            model = para.runs[0]; break
+    style = {"size": None, "bold": None, "name": None, "color": None}
+    if model is not None:
+        style["size"] = model.font.size
+        style["bold"] = model.font.bold
+        style["name"] = model.font.name
+        try:
+            style["color"] = model.font.color.rgb
+        except Exception:
+            style["color"] = None
+    return style
 
-    Closing pages almost always reuse the cover shell, so the page already
-    carries a background photo plus the two translucent blue "wave" bands
-    (``0061FA @75% -> @0`` freeforms washing down from the top). The template's
-    look is: photo + waves over the top ~4.7in, logo pair, three centred text
-    blocks, and **white below** -- there is no full-page background.
 
-    The V9 closing cleared the body and then drew a full-page opaque gradient
-    plus an opaque rounded rect: the photo disappeared, the waves lost their
-    alpha, and the page rendered solid blue. This primitive captures the photo
-    blob and the freeform bands first, re-appends them in draw order, then
-    writes the closing texts (centred, matching the reference).
+def _write_box(sh, text, *, multi=False, align=None):
+    """Replace a text shape's contents with ``text`` while preserving its
+    geometry, font, colour, size and alignment (the inherited DNA). All of the
+    template's own sample paragraphs/runs are removed first so none of them
+    leaks through; the original run style is re-applied to every written line."""
+    style = _shape_style(sh)
+    tf = sh.text_frame
+    # capture the model run's full property block (a:rPr) before clearing, so
+    # the rewritten text inherits the template DNA byte-for-byte -- theme
+    # colours (scheme LIGHT_1 etc.), typefaces and weights that a per-field
+    # rgb copy silently drops, which made white cover titles render dark gray.
+    model_rPr = None
+    for para in tf.paragraphs:
+        for run in para.runs:
+            rPr = run._r.find(qn("a:rPr"))
+            if rPr is not None:
+                model_rPr = copy.deepcopy(rPr)
+                break
+        if model_rPr is not None:
+            break
+    # remove every paragraph but the first
+    first_p = tf.paragraphs[0]._p
+    parent = first_p.getparent()
+    for para in list(tf.paragraphs)[1:]:
+        parent.remove(para._p)
+    # remove every run of the first paragraph
+    a_r = "{http://schemas.openxmlformats.org/drawingml/2006/main}r"
+    for r in list(first_p.findall(a_r)):
+        first_p.remove(r)
+    lines = text.splitlines() if multi else [text]
+    lines = [ln for ln in lines] or [text]
+
+    def emit(paragraph, content):
+        run = paragraph.add_run()
+        run.text = content
+        if model_rPr is not None:
+            # rPr must be the first child of <a:r>, before the <a:t> element.
+            run._r.insert(0, copy.deepcopy(model_rPr))
+            return
+        if style["size"] is not None:
+            run.font.size = style["size"]
+        if style["bold"] is not None:
+            run.font.bold = style["bold"]
+        if style["name"] is not None:
+            run.font.name = style["name"]
+        if style["color"] is not None:
+            try:
+                run.font.color.rgb = style["color"]
+            except Exception:
+                pass
+
+    emit(tf.paragraphs[0], lines[0])
+    for extra in lines[1:]:
+        emit(tf.add_paragraph(), extra)
+    if align is not None:
+        for para in tf.paragraphs:
+            para.alignment = align
+
+
+def _empty_ph_shapes(slide):
+    """Empty placeholder boxes on ``slide`` in authoring order (title idx 0
+    first). These are writable targets that carry the template's inherited
+    heading style but start blank -- the common case for a cover whose title
+    box the author left empty. Text shapes that already have content are not
+    returned (those are handled by the size rank)."""
+    out = []
+    for sh in slide.shapes:
+        try:
+            if (sh.is_placeholder and sh.has_text_frame
+                    and not sh.text_frame.text.strip()):
+                out.append(sh)
+        except Exception:
+            continue
+    out.sort(key=lambda s: int(s.placeholder_format.idx))
+    return out
+
+
+def _rank_text_shapes(slide, *, include_empty_ph=False):
+    """Return text shapes sorted by descending font size -- the largest is the
+    page title, the rest supporting lines. Role-based, no literal matching.
+
+    With ``include_empty_ph`` the blank placeholders (a cover's empty title /
+    subtitle slots) are appended in authoring order so callers can still write
+    into a shell whose sample text the author left empty.
     """
-    import io
-    bg_blob = None
-    bands = []
-    for sh in list(slide.shapes):
-        if (sh.shape_type == 13 and sh.top is not None
-                and sh.top / EMU_PER_INCH < 0):
-            bg_blob = sh.image.blob
-        elif "FREEFORM" in str(sh.shape_type):
-            bands.append(copy.deepcopy(sh._element))
-    for sh in list(slide.shapes):
-        sh._element.getparent().remove(sh._element)
-    if bg_blob:
-        slide.shapes.add_picture(io.BytesIO(bg_blob), 0, Inches(-0.07),
-                                  Inches(13.333), Inches(4.72))
-    for bx in bands:
-        slide.shapes._spTree.append(bx)
-    copy_logos(slide, prs=prs)
-    if title_text:
-        _cover_text(slide, 1.11, 5.17, 11.11, 0.78, MSO_ANCHOR.MIDDLE,
-                    title_text, title_size, title_color, bold=True, font=font,
-                    align=PP_ALIGN.CENTER)
-    if sub_text:
-        _cover_text(slide, 1.11, 6.11, 11.11, 0.42, MSO_ANCHOR.MIDDLE,
-                    sub_text, sub_size, sub_color, font=font,
-                    align=PP_ALIGN.CENTER)
-    if meta_text:
-        _cover_text(slide, 1.11, 6.69, 11.11, 0.33, MSO_ANCHOR.MIDDLE,
-                    meta_text, meta_size, meta_color, font=font,
-                    align=PP_ALIGN.CENTER)
+    shapes = list(_iter_text_shapes(slide))
+    shapes.sort(key=_font_size_pt, reverse=True)
+    if include_empty_ph:
+        have = {id(s) for s in shapes}
+        shapes.extend(s for s in _empty_ph_shapes(slide) if id(s) not in have)
+    return shapes
+
+
+def _cluster_by_size(slide) -> list[tuple[int, list]]:
+    """Group non-empty text shapes by (rounded) font size.
+
+    Returns ``[(size_pt, [shapes ...]), ...]`` ordered by descending size; the
+    shapes inside a cluster are sorted in reading order (top, then left) so a
+    horizontally-spread TOC and a vertically-stacked one both come out in the
+    author's intended sequence. A cluster with more than one member is a
+    *repeated field* -- the structural signature of a table-of-contents grid.
+    """
+    groups: dict[int, list] = {}
+    for sh in _iter_text_shapes(slide):
+        pt = _font_size_pt(sh)
+        if not pt:
+            continue
+        groups.setdefault(int(round(pt)), []).append(sh)
+
+    def reading_order(sh):
+        top = (sh.top or 0) / EMU_PER_INCH
+        left = (sh.left or 0) / EMU_PER_INCH
+        return (round(top, 1), left)
+
+    return [(size, sorted(shs, key=reading_order))
+            for size, shs in sorted(groups.items(), key=lambda kv: -kv[0])]
+
+
+def _blank_box(sh):
+    """Empty a text shape in place, keeping it (and its formatting) for reuse."""
+    tf = sh.text_frame
+    first_p = tf.paragraphs[0]._p
+    a_r = "{http://schemas.openxmlformats.org/drawingml/2006/main}r"
+    for para in list(tf.paragraphs)[1:]:
+        para._p.getparent().remove(para._p)
+    for r in list(first_p.findall(a_r)):
+        first_p.remove(r)
+
+
+def slide_foreground(slide):
+    """The template's own text colour for ``slide``, as a hex string or None.
+
+    Reads the *largest* run on the shell -- the page title, the element whose
+    colour the author chose against that page's background -- and returns its
+    inherited RGB. Used by the synthetic fallbacks so a hand-drawn divider or
+    TOC keeps the template's contrast (black ink on a white layout, white on a
+    dark one) instead of a fixed palette. No literal colours are matched; the
+    value simply comes from the DNA already present on the shell.
+    """
+    ranked = _rank_text_shapes(slide)
+    for sh in ranked:
+        color = _shape_style(sh).get("color")
+        if color is not None:
+            try:
+                return str(color)
+            except Exception:
+                continue
+    return None
+
+
+def rebuild_section(slide, *, prs=None, title_text="", meta_text="",
+                    chapter_num=""):
+    """Rebuild a section/divider page by editing the template shell's OWN text.
+
+    Same fidelity contract as :func:`rebuild_cover` -- edit in place, inherit
+    colour/font/geometry/background, never wipe-and-redraw. The shell's boxes
+    are ranked by font size:
+
+      * the biggest box is the display element (a chapter number in most
+        templates) -> ``chapter_num`` when given, else ``title_text``;
+      * the next box takes ``title_text`` when the biggest box was the number;
+      * a following box takes ``meta_text`` (byline/date).
+
+    Everything the template painted (the rotated band, both logos, the master
+    background, and the inherited run colour -- black on a light divider, white
+    on a dark one) survives untouched. This is what kills the white-on-white
+    section bug: the divider text simply keeps whatever colour the template's
+    own heading box already used.
+    """
+    title_text = _strip_md(title_text)
+    meta_text = _strip_md(meta_text)
+    chapter_num = _strip_md(chapter_num)
+    ranked = _rank_text_shapes(slide)
+    if not ranked:
+        return False
+    want = title_text or chapter_num or meta_text
+    if not want:
+        return False
+    # A *display* box is the one whose font dwarfs the rest -- the oversized
+    # numeral ("01") a divider paints for a chapter index. It is a structural
+    # signal (>=1.7x the next size), never a literal match, and it is sized for
+    # a token, not a heading: overflowing a title into it wrecks the layout.
+    # When the caller has a number it belongs there; when it does not, the box
+    # is blanked so no stale sample leaks and the title drops to the heading box.
+    display = 0 if len(ranked) > 1 and \
+        _font_size_pt(ranked[0]) >= 1.7 * max(_font_size_pt(ranked[1]), 1) else -1
+    if display == 0:
+        # a real display-numeral box exists
+        if chapter_num:
+            _write_box(ranked[0], chapter_num)
+        else:
+            _blank_box(ranked[0])
+        body, slots = ranked[1:], [title_text, meta_text]
+    else:
+        # no oversized box -- the biggest box is the heading itself
+        body, slots = ranked, [title_text or chapter_num, meta_text]
+    si = 0
+    for sh in body:
+        while si < len(slots) and not slots[si]:
+            si += 1
+        if si >= len(slots):
+            break
+        _write_box(sh, slots[si])
+        si += 1
+    return True
+
+
+def rebuild_toc(slide, *, prs=None, items=None, title_text="", title_en=""):
+    """Rebuild a table-of-contents page in place from the shell's own grid.
+
+    A TOC is recognised structurally, not by any label: it is the hand-composed
+    page that repeats a *field* -- several equal-font boxes in reading order. We
+    fill the title cluster with the chapter names and, when a second repeated
+    cluster of larger display numerals exists, the index cluster with ``01``,
+    ``02`` ... Slots left past the item count are blanked (never carry stale
+    template text). All colour, font, size and geometry -- the inherited DNA --
+    are kept exactly as the template authored them, so the deck stays black-on-
+    white on a white template and white-on-dark on a dark one.
+    """
+    items = [it for it in (items or []) if it]
+    clusters = _cluster_by_size(slide)
+    # repeated-field clusters (>=2 boxes) are the TOC grid, biggest display first
+    repeated = [(sz, shs) for sz, shs in clusters if len(shs) >= 2]
+    # the smaller-font repeated cluster holds the chapter titles; a larger-font
+    # repeated cluster (if any) is the index numerals.
+    titles_slot = None
+    nums_slot = None
+    if repeated:
+        titles_slot = repeated[-1][1]                 # smallest font = titles
+        others = repeated[:-1]
+        if others:
+            nums_slot = others[0][1]                  # next-larger = numerals
+    elif clusters:
+        # only a single group (e.g. one merged title row) -> fill titles there
+        titles_slot = clusters[0][1]
+
+    applied = False
+    if titles_slot and items:
+        for k, sh in enumerate(titles_slot):
+            if k < len(items):
+                it = items[k]
+                name = (it.get("title") if isinstance(it, dict) else it[0]) \
+                    if it else ""
+                _write_box(sh, _strip_md(str(name)))
+                applied = True
+            else:
+                _blank_box(sh)
+    if nums_slot and applied:
+        for k, sh in enumerate(nums_slot):
+            _write_box(sh, "%02d" % (k + 1))
+    # a leading single-box cluster may carry the page heading (CONTENTS / 目录);
+    # leave it as the template authored it unless a caller supplies text and it
+    # is clearly the unique (non-repeated) heading box.
+    return applied
+
+
+def rebuild_cover(slide, *, prs=None, pill_text="", title_text="",
+                  meta_text="", bar_hex=CHROME_BAR, font="思源黑体"):
+    """Rebuild a cover by editing the template shell's OWN text IN PLACE.
+
+    Field identity is by font-size rank, not literals: the biggest text box
+    becomes the title, the next one becomes the byline/meta. Everything else --
+    logos, colours, positions, sizes, the layout's background -- is inherited
+    byte-for-byte, which is the whole point of the clone route. We never wipe
+    the shell or synthesise a photo/pill/wash band, because a template cover
+    may legitimately have none of those.
+    """
+    title_text = _strip_md(title_text)
+    meta_text = _strip_md(meta_text)
+    pill_text = _strip_md(pill_text)
+    ranked = _rank_text_shapes(slide, include_empty_ph=True)
+    if title_text and ranked:
+        _write_box(ranked[0], title_text, multi=True)
+    byline = meta_text or pill_text
+    if byline:
+        target = ranked[1] if len(ranked) > 1 else (ranked[0] if ranked else None)
+        if target is not None and target is not (ranked[0] if title_text else None):
+            _write_box(target, byline)
+    # any placeholder we did not write would resolve back to its layout twin and
+    # paint the master's "click to edit" prompt -- drop those dead DNA slots.
+    drop_empty_placeholders(slide)
+    return
+
+
+def rebuild_closing(slide, *, prs=None, title_text="", sub_text="",
+                    meta_text="", font="思源黑体",
+                    title_size=36, sub_size=18, meta_size=13,
+                    title_color="0D64BF", sub_color="0D64BF",
+                    meta_color="68737F"):
+    """Rebuild a closing page by editing the template shell's own text IN PLACE.
+
+    Closing reuses the cover shell, so it follows the identical fidelity
+    contract: swap the biggest-font box for the closing title and the next box
+    for the byline/subtitle, inheriting all other design DNA. No photo, no band,
+    no invented chrome.
+    """
+    title_text = _strip_md(title_text)
+    sub_text = _strip_md(sub_text)
+    meta_text = _strip_md(meta_text)
+    ranked = _rank_text_shapes(slide, include_empty_ph=True)
+    if not ranked:
+        return False
+    from pptx.enum.text import PP_ALIGN as _A
+    slots = [x for x in (title_text, sub_text, meta_text) if x]
+    if not slots:
+        return False
+    # fill one line per available box in rank order; if the shell offers fewer
+    # boxes than lines, stack the remainder inside the last box. Closing keeps
+    # the route's centered convention (the cover heading is authored centred).
+    extra = []
+    if len(slots) > len(ranked):
+        extra = slots[len(ranked) - 1:]
+        slots = slots[:len(ranked) - 1]
+    for i, line in enumerate(slots):
+        _write_box(ranked[i], line, align=_A.CENTER)
+    if extra and ranked:
+        # any surplus lines go to the SMALLEST box (the byline slot) -- never
+        # the oversized display title, which would stack several giant lines and
+        # collide. Its inherited small-font style keeps them as a compact footer.
+        foot = ranked[-1]
+        # replace (never prepend) the shell's own sample byline -- the closing
+        # owns these lines now; keeping them leaked "汇报人：XXX" from the cover.
+        _write_box(foot, "\n".join(extra), multi=True, align=_A.CENTER)
+    drop_empty_placeholders(slide)
+    return True
 
 
 def _cover_text(slide, x, y, w, h, anchor, text, size, color, *, bold=False,
@@ -853,7 +1316,7 @@ def audit_pages(prs, overflow_tol_in: float = 0.06,
                 if ox > collide_tol_in and oy > collide_tol_in and _dw(t1) > 2 and _dw(t2) > 2:
                     issues.append({"page": pi, "kind": "collision",
                                    "msg": f'"{t1}" x "{t2}" ov {ox:.2f}x{oy:.2f}in'})
-        if not any(_dw(t) > 2 for _, _, _, _, t in boxes):
+        if not boxes:
             issues.append({"page": pi, "kind": "empty", "msg": "no text-bearing shapes"})
         # Duplicate text in different shapes on one page. Two distinct
         # situations look identical to a naive count:

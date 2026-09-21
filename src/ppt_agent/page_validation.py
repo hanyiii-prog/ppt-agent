@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from PIL import Image
@@ -24,6 +24,9 @@ class PageGate:
     role: str = "unknown"
     text_shapes: int = 0
     image_shapes: int = 0
+    # non-blocking layout findings (e.g. marginal overflow estimates)
+    # surfaced by the clone-route auditor; reported but never fail a page
+    layout_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -77,6 +80,19 @@ def _title_text(slide) -> str:
     return ""
 
 
+def _is_zero_size(shape) -> bool:
+    """True when a shape's box is genuinely degenerate.
+
+    A straight connector that is perfectly horizontal (or vertical) legitimately
+    has zero height (or zero width) in PowerPoint geometry, so only one axis is
+    checked for lines: they are broken only when *both* axes collapse.
+    """
+    width, height = shape.width or 0, shape.height or 0
+    if shape.shape_type == MSO_SHAPE_TYPE.LINE:
+        return width <= 0 and height <= 0
+    return width <= 0 or height <= 0
+
+
 def validate_deck_structure(pptx: Path) -> list[tuple[int, int, int, list[str]]]:
     prs = Presentation(str(pptx))
     sw, sh = prs.slide_width, prs.slide_height
@@ -85,7 +101,7 @@ def validate_deck_structure(pptx: Path) -> list[tuple[int, int, int, list[str]]]
         oob = zero = 0
         issues: list[str] = []
         for shape in slide.shapes:
-            if shape.width <= 0 or shape.height <= 0:
+            if _is_zero_size(shape):
                 zero += 1
             if shape.left < 0 or shape.top < 0 or shape.left + shape.width > sw or shape.top + shape.height > sh:
                 oob += 1

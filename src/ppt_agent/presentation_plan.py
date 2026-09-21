@@ -117,19 +117,70 @@ def build_presentation_plan(
     }
 
 
+def _title_body_units(blocks: list) -> list[list]:
+    """Group a block stream into atomic units so a card title is never
+    paginated away from the body that follows it.
+
+    The markdown parser emits a short *title* block (a heading, or a one-item
+    list such as ``1. 破局思路``) immediately followed by its *body* block (a
+    paragraph or a multi-item list). Packing them individually let the greedy
+    page splitter drop the orphaned title onto the last card of one page while
+    its body landed on the next page -- producing title-only cards with an
+    empty body (the "blank control" defect). Binding title+body into one unit
+    keeps every card whole. Tables and unpaired blocks form their own unit.
+    """
+    units: list[list] = []
+    i, n = 0, len(blocks)
+    while i < n:
+        b = blocks[i]
+        if b.type == "table":
+            units.append([b])
+            i += 1
+            continue
+        is_list = b.type in ("bullets", "ordered")
+        single_item = is_list and bool(getattr(b, "items", None)) and len(b.items) == 1
+        title_text = ""
+        if b.type == "heading":
+            title_text = (b.text or "").strip()
+        elif single_item:
+            title_text = b.items[0].strip()
+
+        is_title = (
+            bool(title_text)
+            and len(title_text) <= 26
+            and not any(c in title_text for c in "：:。.;；")
+        )
+        if is_title and i + 1 < n:
+            nb = blocks[i + 1]
+            has_body = (nb.type == "paragraph" and bool((nb.text or "").strip())) or (
+                nb.type in ("bullets", "ordered") and bool(getattr(nb, "items", None))
+            )
+            if has_body:
+                units.append([b, nb])
+                i += 2
+                continue
+        units.append([b])
+        i += 1
+    return units
+
+
 def _add_content_pages(add_page, heading, blocks: list, capacity: float) -> None:
-    """Greedy pagination of non-table blocks into content pages."""
+    """Greedy pagination of non-table blocks into content pages.
+
+    Units are whole title+body pairs (see :func:`_title_body_units`), so a
+    card's heading and its description always land on the same page.
+    """
     if not blocks:
         return
     current: list = []
     volume = 0.0
-    for block in blocks:
-        block_volume = block.char_volume()
-        if current and volume + block_volume > capacity:
+    for unit in _title_body_units(blocks):
+        unit_volume = sum(bl.char_volume() for bl in unit)
+        if current and volume + unit_volume > capacity:
             add_page("content", heading.text, current)
             current, volume = [], 0.0
-        current.append(block)
-        volume += block_volume
+        current.extend(unit)
+        volume += unit_volume
     if current:
         add_page("content", heading.text, current)
 

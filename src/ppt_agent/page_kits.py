@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """page_kits -- reusable page-composition kits for the clone-shell route.
 
 Learned from the Kimi v1 -> v2 revision of the 专病数据库 deck (2026-09). Each
@@ -37,7 +37,7 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches, Pt
 
 from .clone_shell import (CHROME_BAR, add_content_chrome, box, clear_body,
-                          gradient_fill, layout_chrome, set_geom)
+                          gradient_fill, layout_chrome, set_geom, _strip_md)
 
 # --- palette ---------------------------------------------------------------
 P = CHROME_BAR            # brand blue bar
@@ -87,6 +87,31 @@ CH_LIST = (1.562, 3.728, 6.521, 1.376)       # 14pt bold, white, N lines
 
 
 # --- primitives ------------------------------------------------------------
+def _tb_has_text(lines) -> bool:
+    """True when a _tb ``lines`` argument carries any non-blank text.
+
+    Mirrors the shapes _tb accepts: str, ``(text, size, color, bold)`` tuples,
+    and a list of run-tuples grouped into one paragraph.
+    """
+    def _leaf(v):
+        if isinstance(v, (list, tuple)):
+            v = v[0] if v else ""
+        v = _strip_md(str(v))
+        return bool(v.strip())
+    if isinstance(lines, str):
+        return any(_leaf(ln) for ln in lines.split("\n"))
+    for ln in lines:
+        if isinstance(ln, (list, tuple)) and ln and isinstance(ln[0], (list, tuple)):
+            if any(_leaf(r) for r in ln):
+                return True
+        elif isinstance(ln, (list, tuple)):
+            if _leaf(ln):
+                return True
+        elif _leaf(ln):
+            return True
+    return False
+
+
 def _tb(slide, x, y, w, h, lines, *, size=11, color=TXT, bold=False,
         font=FONT, align=None, anchor=MSO_ANCHOR.TOP, spacing=None):
     """Add a text box.
@@ -96,6 +121,11 @@ def _tb(slide, x, y, w, h, lines, *, size=11, color=TXT, bold=False,
     paragraph), or a **list of such tuples** (= ONE paragraph with several
     styled runs, e.g. "3 " blue-bold + task text + muted owner).
     """
+    # A text box with nothing to say is the "blank control" defect: the kits
+    # receive condensed card data whose body may be empty (a short title with
+    # no remainder). Skip those so the deck never carries a ghost box.
+    if not _tb_has_text(lines):
+        return None
     shp = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
     tf = shp.text_frame
     tf.word_wrap = True
@@ -118,7 +148,9 @@ def _tb(slide, x, y, w, h, lines, *, size=11, color=TXT, bold=False,
         for rspec in runs:
             t, sz, c, b = rspec
             r = p.add_run()
-            r.text = t
+            # never let raw markdown emphasis reach a slide (the kits receive
+            # plan text verbatim; the shell-rebuild path strips, kits must too)
+            r.text = _strip_md(t)
             r.font.size = Pt(sz)
             r.font.bold = b
             r.font.name = font
@@ -202,7 +234,7 @@ def content_header(slide, title, lead=None, *, prs=None, title_size=20,
 
 
 # --- kit: chapter / section page -------------------------------------------
-def chapter_page(slide, title, lines, *, prs=None, title_size=44):
+def chapter_page(slide, title, lines, *, prs=None, title_size=44, fg=None):
     """A chapter divider page -- and the canonical example of *inheriting*
     template chrome instead of redrawing it.
 
@@ -221,20 +253,29 @@ def chapter_page(slide, title, lines, *, prs=None, title_size=44):
     -- and copied the logos again on top of the layout's. Three bugs, one
     cause: redrawing chrome the layout already renders.
 
-    ``lines`` is the sub-topic list, one entry per line (white, bold, 14pt).
+    ``lines`` is the sub-topic list, one entry per line (bold, 14pt).
+
+    ``fg`` is the *inherited* foreground colour (a hex string) the caller read
+    off the template shell via :func:`~ppt_agent.clone_shell.slide_foreground`;
+    when it is omitted the kit falls back to the deck ink (a dark navy) because
+    a synthetic divider borrows a light content shell -- the old hardcoded white
+    was the white-on-white blank bug. The caller on the clone route prefers an
+    in-place ``rebuild_section`` and only reaches this kit as a disclosed
+    fallback.
     """
     clear_body(slide, keep=())        # drop the shell's own decorations + PH
+    fg = fg or PD
     if isinstance(lines, str):
         lines = [ln for ln in lines.split("\n") if ln.strip()]
     x, y, w, h = CH_TITLE
-    _tb(slide, x, y, w, h, title, size=title_size, color=WHITE, bold=True,
+    _tb(slide, x, y, w, h, title, size=title_size, color=fg, bold=True,
         anchor=MSO_ANCHOR.MIDDLE)
     lx, ly, lw, lh = CH_LINE
-    _hair(slide, lx, ly, lw, lh, WHITE)
+    _hair(slide, lx, ly, lw, lh, fg)
     if lines:
         cx, cy, cw, ch = CH_LIST
         _tb(slide, cx, cy, cw, ch,
-            [(ln, 14, WHITE, True) for ln in lines], spacing=1.45)
+            [(ln, 14, fg, True) for ln in lines], spacing=1.45)
     return slide
 
 
@@ -454,9 +495,17 @@ def column_cards(slide, cards, *, cols=None, title="", lead=None, prs=None,
     hdr_top = content_header(slide, title, lead, prs=prs)
     top = hdr_top if top is None else top
     ramps = ramps or [GRAD_PRIMARY, GRAD_STAGE2, GRAD_STAGE3]
+    # Overflow guard: auto-planned pages (no explicit cols/card_h) never
+    # squeeze more than four cards into a row -- the extras wrap onto stacked
+    # rows sharing the vertical space instead of collapsing into unreadable
+    # one-character slivers. Reference-exact callers pass explicit geometry
+    # and keep their original single-row layout.
+    wrap = cols is None and card_h is None and len(cards) > 4
+    if wrap:
+        n = 4
+    n = max(1, n)
     if gap is None:
         gap = _COL_GAP.get(n, 0.15)
-    n = max(1, n)
     w = (13.333 - 2 * M - gap * (n - 1)) / n
     if bottom:
         bh = bottom.get("h", 1.11)
@@ -464,38 +513,45 @@ def column_cards(slide, cards, *, cols=None, title="", lead=None, prs=None,
     else:
         bh = 0.0
         by = BOT
-    card_h = card_h or (by - top - (0.29 if bottom else 0.0))
-    for i, c in enumerate(cards[:n]):
-        x = M + i * (w + gap)
-        _round(slide, x, top, w, card_h, fill=WHITE, line=DIV, lw=1.0, radius=0.055)
+    v_gap = 0.18 if wrap else 0.0
+    if wrap:
+        rows = -(-len(cards) // n)
+        card_h = (by - top - v_gap * (rows - 1)) / rows
+    else:
+        card_h = card_h or (by - top - (0.29 if bottom else 0.0))
+    for i, c in enumerate(cards if wrap else cards[:n]):
+        col_i, row_i = (i % n, i // n) if wrap else (i, 0)
+        y = top + row_i * (card_h + v_gap)
+        x = M + col_i * (w + gap)
+        _round(slide, x, y, w, card_h, fill=WHITE, line=DIV, lw=1.0, radius=0.055)
         if c.get("icon"):
             # centred icon block: icon -> title -> body
-            _round(slide, x + w / 2 - 0.4165, top + 0.305, 0.833, 0.833,
+            _round(slide, x + w / 2 - 0.4165, y + 0.305, 0.833, 0.833,
                    grad=GRAD_STAGE3, radius=0.50)
-            _icon(slide, x + w / 2 - 0.2085, top + 0.514, 0.417, P, c["icon"])
-            _tb(slide, x + 0.222, top + 1.305, w - 0.444, 0.361, c["title"],
+            _icon(slide, x + w / 2 - 0.2085, y + 0.514, 0.417, P, c["icon"])
+            _tb(slide, x + 0.222, y + 1.305, w - 0.444, 0.361, c["title"],
                 size=15, color=PD, bold=True, align=PP_ALIGN.CENTER)
-            _tb(slide, x + 0.277, top + 1.750, w - 0.554, card_h - 1.85,
+            _tb(slide, x + 0.277, y + 1.750, w - 0.554, card_h - 1.85,
                 _runs(c.get("body", ""), size=c.get("size", 10.0)), spacing=1.30)
             continue
-        ry = top
+        ry = y
         if head_h:
             if c.get("grad"):
-                _round(slide, x, top, w, head_h, grad=ramps[i % len(ramps)],
+                _round(slide, x, y, w, head_h, grad=ramps[i % len(ramps)],
                        radius=0.055)
                 tcol, scol = WHITE, WHITE
             else:
-                _round(slide, x, top, w, head_h, fill=CHIP, line=DIV, radius=0.055)
+                _round(slide, x, y, w, head_h, fill=CHIP, line=DIV, radius=0.055)
                 tcol, scol = PD, INK
-            _tb(slide, x + 0.16, top + 0.06, w - 0.32, head_h - 0.12,
+            _tb(slide, x + 0.16, y + 0.06, w - 0.32, head_h - 0.12,
                 [(c["title"], head_size, tcol, True)] +
                 ([(c.get("sub", ""), sub_size, scol, False)] if c.get("sub") else []),
                 align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
-            ry = top + head_h + 0.18
+            ry = y + head_h + 0.18
         else:
-            _tb(slide, x + 0.17, top + 0.16, w - 0.34, 0.40, c["title"], size=13,
+            _tb(slide, x + 0.17, y + 0.16, w - 0.34, 0.40, c["title"], size=13,
                 color=PD, bold=True, align=PP_ALIGN.CENTER)
-            ry = top + 0.66
+            ry = y + 0.66
         for chip in c.get("chips", []) or []:
             _round(slide, x + 0.22, ry, w - 0.44, 0.40, fill=CHIP, radius=0.30)
             _tb(slide, x + 0.22, ry, w - 0.44, 0.40, chip, size=10.5, color=INK,
@@ -507,7 +563,7 @@ def column_cards(slide, cards, *, cols=None, title="", lead=None, prs=None,
         if lines:
             norm = [ln if isinstance(ln, (list, tuple)) and not isinstance(ln, str)
                     else (ln, c.get("size", 10), TXT, False) for ln in lines]
-            _tb(slide, x + 0.20, ry, w - 0.40, top + card_h - ry - 0.16,
+            _tb(slide, x + 0.20, ry, w - 0.40, y + card_h - ry - 0.16,
                 norm, spacing=1.32)
     if bottom:
         bgrad = bottom.get("grad", bottom_grad)
@@ -591,6 +647,29 @@ def stage_cards(slide, stages, tasks=None, *, task_title=None, title="",
     return top
 
 
+def _cget(card, *keys, default=""):
+    """Read the first present, non-empty field from a card dict.
+
+    Plans and producers label card fields inconsistently (title/name/role,
+    body/duties/sub). Kits should never ``KeyError`` because a synonym was
+    supplied instead of the canonical name, so every card read goes through
+    this alias lookup with a safe default."""
+    for k in keys:
+        v = card.get(k)
+        if v not in (None, "", [], {}):
+            return v
+    return default
+
+
+def _clist(value):
+    """Normalise a body that may be a str, a list, or None into a list of lines."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return list(value)
+
+
 # --- kit: four role cards (replaces a RACI table) --------------------------
 def four_role_cards(slide, cards, note=None, *, title="", lead=None, prs=None):
     """Draw N (usually 4) bordered responsibility cards + an optional note bar.
@@ -611,14 +690,19 @@ def four_role_cards(slide, cards, note=None, *, title="", lead=None, prs=None):
         _round(slide, x, top, w, hdr_h, grad=GRAD_PRIMARY, radius=0.08)
         _icon(slide, x + w / 2 - 0.21, top + 0.14, 0.42, WHITE, "cloud")
         _tb(slide, x + 0.10, top + 0.58, w - 0.20, 0.56,
-            [(c["name"], 13, WHITE, True), (c.get("sub", ""), 10, "D6E9FF", False)],
+            [(_cget(c, "name", "title"), 13, WHITE, True),
+             (_cget(c, "sub", "role", default=""), 10, "D6E9FF", False)],
             align=PP_ALIGN.CENTER)
         cy = top + 1.36
-        _round(slide, x + 0.22, cy, w - 0.44, 0.42, fill=CHIP, radius=0.30)
-        _tb(slide, x + 0.22, cy, w - 0.44, 0.42, c["role"], size=12, color=INK,
-            bold=True, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
-        duties = [("● " + d, 10, TXT, False) for d in c.get("duties", [])]
-        _tb(slide, x + 0.22, cy + 0.58, w - 0.44, card_h - 2.0, duties, spacing=1.35)
+        role = _cget(c, "role", "sub")
+        if role:
+            _round(slide, x + 0.22, cy, w - 0.44, 0.42, fill=CHIP, radius=0.30)
+            _tb(slide, x + 0.22, cy, w - 0.44, 0.42, role, size=12, color=INK,
+                bold=True, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+        duties_src = c.get("duties") or _clist(_cget(c, "body", "text"))
+        body_y = cy + (0.58 if role else 0.0)
+        duties = [("● " + d, 10, TXT, False) for d in _clist(duties_src)]
+        _tb(slide, x + 0.22, body_y, w - 0.44, card_h - 2.0, duties, spacing=1.35)
     if note:
         _note_bar(slide, note)
 
@@ -697,7 +781,8 @@ def org_chart(slide, top_node, groups, depts, note=None, *, title="", lead=None,
         _round(slide, x, dep_y, dw, dep_h, fill=WHITE, line=DIV, radius=0.10)
         _round(slide, x, dep_y, dw, 0.56, grad=GRAD_PRIMARY, radius=0.10)
         _tb(slide, x + 0.11, dep_y, dw - 0.22, 0.56,
-            [(d["name"], 12, WHITE, True), (d.get("sub", ""), 9, "D6E9FF", False)],
+            [(_cget(d, "name", "title"), 12, WHITE, True),
+             (_cget(d, "sub", "role", default=""), 9, "D6E9FF", False)],
             align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
         mem = d.get("members", [])
         if isinstance(mem, str):

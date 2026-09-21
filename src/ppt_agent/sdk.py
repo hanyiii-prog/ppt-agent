@@ -233,6 +233,13 @@ class PptAgent:
 
         degraded.append("render_preview")
         structural = validate_structural_pages(deck)
+        # Even without a rasteriser the clone-route layout audit measures the
+        # deck structurally, so 质检 keeps teeth: fold it into the page gate.
+        try:
+            from .delivery import merge_layout_audit, run_layout_audit
+            structural = merge_layout_audit(structural, run_layout_audit(deck))
+        except Exception:  # pragma: no cover - audit must never crash the gate
+            pass
         return {
             "passed": structural.passed,
             "mode": "structural",

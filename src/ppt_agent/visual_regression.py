@@ -106,7 +106,17 @@ def rasteriser_tools() -> tuple[str, ...]:
 
 
 def preview_backend() -> str | None:
-    """Which rasterisation backend can actually run here."""
+    """Which rasterisation backend can actually run here, real engines first.
+
+    ``powerpoint`` (the ground truth the user sees) then ``libreoffice`` then the
+    Pillow approximation. A real backend always wins because Pillow cannot
+    reproduce master backgrounds, full-bleed images or picture crops, so visual
+    checks made from it are unreliable (see :mod:`ppt_agent.render_real`).
+    """
+    from . import render_real
+
+    if render_real.powerpoint_available():
+        return "powerpoint"
     if office_binary() is not None and shutil.which("pdftoppm") is not None:
         return "libreoffice"
     try:
@@ -140,18 +150,30 @@ def _prepare_output_dir(output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
 
-def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144) -> list[Path]:
-    """Render a PPTX to one PNG per slide; raises when no backend or on failure."""
+def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144, *, allow_approximate: bool = False) -> list[Path]:
+    """Render a PPTX to one PNG per slide, real engines first.
+
+    PowerPoint (native, the ground truth the user sees) and LibreOffice reproduce
+    master backgrounds, full-bleed images and picture crops faithfully. The
+    Pillow approximation is used only when no real backend exists AND the caller
+    opts in via ``allow_approximate``: visual gates must never be judged from a
+    render that cannot reproduce the template (see :mod:`ppt_agent.render_real`).
+    """
     pptx = Path(pptx)  # accept str paths: the libreoffice branch uses pptx.stem
     backend = preview_backend()
     if backend is None:
         raise VisualGateUnavailable(
-            "no rasteriser available: install LibreOffice (soffice + pdftoppm) "
-            "or Pillow to enable visual gates"
+            "no rasteriser available: install PowerPoint or LibreOffice "
+            "(soffice + pdftoppm) to enable visual gates"
         )
     _prepare_output_dir(output_dir)
 
-    if backend == "libreoffice":
+    if backend == "powerpoint":
+        from . import render_real
+
+        pages = sorted(render_real.rasterize_with_powerpoint(
+            pptx, output_dir, dpi=float(dpi), prefix="slide"))
+    elif backend == "libreoffice":
         binary = office_binary()
         with tempfile.TemporaryDirectory(prefix="ppt-agent-render-") as tmp:
             tmp_path = Path(tmp)
@@ -161,7 +183,12 @@ def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144) -> list[Path]:
                 raise RuntimeError(f"LibreOffice did not produce PDF for {pptx}")
             _run(["pdftoppm", "-png", "-r", str(dpi), str(pdf), str(output_dir / "slide")])
         pages = sorted(output_dir.glob("slide-*.png"))
-    else:
+    else:  # backend == "pillow": an approximation, never silently for gates
+        if not allow_approximate:
+            raise VisualGateUnavailable(
+                "only the Pillow approximation is available; refusing to judge "
+                "visual fidelity from a hand-painted render"
+            )
         from .preview import rasterize_pptx
 
         pages = sorted(rasterize_pptx(pptx, output_dir, dpi=float(dpi), prefix="slide"))

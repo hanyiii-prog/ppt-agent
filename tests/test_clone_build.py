@@ -132,11 +132,31 @@ def test_missing_kit_data_is_named(mini_template, tmp_path):
             tmp_path / "o.pptx", audit=False)
 
 
-def test_insufficient_shells_fail_the_plan_up_front(mini_template, tmp_path):
+def test_short_shell_pools_reuse_shells(tmp_path, mini_template):
+    """A plan with more pages than unique shells is NOT rejected -- content
+    pages duplicate a template shell so a 13-slide template can serve an
+    18-25 page deck (each page still inherits real DNA). Rejecting this was the
+    bug that pushed real decks into the synthetic fallback route."""
     pages = [{"role": "content", "kit": "quad_cards", "title": f"p{i}",
               "cards": [{"title": "a", "body": "b"}]} for i in range(7)]
+    result = render_clone_deck(mini_template, pages, tmp_path / "o.pptx",
+                               audit=False, fidelity=False)
+    assert result["pages"] == 7
+
+
+def test_role_with_no_shell_fails_up_front(tmp_path):
+    """A role the template cannot supply at all -- a cover on a content-only
+    deck, where duplication has nothing to clone -- must still refuse up front."""
+    from pptx import Presentation
+    prs = Presentation()
+    prs.slide_layouts[5].name = "内容页 - 列表版"
+    for _ in range(2):
+        prs.slides.add_slide(prs.slide_layouts[5])
+    tpl = tmp_path / "no_cover.pptx"
+    prs.save(str(tpl))
     with pytest.raises(CloneBuildError, match="template cannot serve this page plan"):
-        render_clone_deck(mini_template, pages, tmp_path / "o.pptx", audit=False)
+        render_clone_deck(str(tpl), [{"role": "cover", "title": "T"}],
+                          tmp_path / "o.pptx", audit=False, fidelity=False)
 
 
 def test_audit_deck_flags_overflow(mini_template, tmp_path):

@@ -156,7 +156,12 @@ def test_gate_degrades_to_structural_checks_without_a_rasteriser(sample_markdown
 def test_gate_uses_the_rendered_pipeline_when_a_rasteriser_exists(workspace: Path, monkeypatch):
     pptx = pytest.importorskip("pptx")
     prs = pptx.Presentation()
-    prs.slides.add_slide(prs.slide_layouts[6])
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    # A page gate that now catches blank slides needs real text on this
+    # fixture; the test is about the *rendered* pipeline being used, not
+    # about blessing an empty page.
+    box = slide.shapes.add_textbox(100000, 100000, 4000000, 500000)
+    box.text_frame.text = "Quarterly Review Highlights"
     deck = workspace / "tiny.pptx"
     prs.save(str(deck))
 

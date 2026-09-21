@@ -10,6 +10,7 @@ functions so the core import chain stays dependency-free (CI
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,25 @@ _MD_HEADING_PREFIXES = ("#",)
 def _next_id(prefix: str, counter: list[int]) -> str:
     counter[0] += 1
     return f"{prefix}-{counter[0]:04d}"
+
+
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_ITALIC = re.compile(r"(?<![\w*])\*([^*\n]+?)\*(?![\w*])")
+_UNDER = re.compile(r"_{2}(.+?)_{2}")
+
+
+def _strip_inline_markup(line: str) -> str:
+    """Remove inline Markdown emphasis markers (``**bold**``, ``*it*``, ``__u__``).
+
+    A deck renders plain text, so these markers would otherwise appear as
+    literal ``**`` noise inside card titles and bodies. Applied per source
+    line before block classification; the bullet prefixes (``- ``/``* ``) use a
+    trailing space, not a ``**`` pair, so they are never touched here.
+    """
+    line = _BOLD.sub(r"\1", line)
+    line = _UNDER.sub(r"\1", line)
+    line = _ITALIC.sub(r"\1", line)
+    return line
 
 
 # --------------------------------------------------------------------------- #
@@ -35,6 +55,7 @@ def parse_markdown(text: str, *, source: str | None = None) -> ContentDocument:
     blocks: list[ContentBlock] = []
     counter = [0]
     lines = text.replace("\r\n", "\n").split("\n")
+    lines = [_strip_inline_markup(ln) for ln in lines]
     index = 0
     title: str | None = None
 

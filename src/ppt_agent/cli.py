@@ -167,6 +167,23 @@ def _print_capabilities(payload: dict) -> None:
     print("host profiles : " + ", ".join(profile["name"] for profile in payload["host_profiles"]))
 
 
+def _rasterise_preview(pptx: Path, output_dir: Path, dpi: float) -> list[Path]:
+    """Render page previews with a real engine so they match what the user sees.
+
+    Previews are for human inspection, so unlike the visual gate they must not
+    hard-fail when the host has no real rasteriser: fall back to the Pillow
+    approximation only in that case (and it will be visibly incomplete).
+    """
+    from .visual_regression import VisualGateUnavailable, render_pptx
+
+    try:
+        return render_pptx(pptx, output_dir, dpi=int(round(dpi)))
+    except VisualGateUnavailable:
+        from .preview import rasterize_pptx
+
+        return rasterize_pptx(pptx, output_dir, dpi=float(dpi), prefix="slide")
+
+
 def main() -> int:
     parser = build_parser(); args = parser.parse_args()
     if args.command in {"validate-ir", "qa-ir"}:
@@ -284,8 +301,7 @@ def main() -> int:
             elif gate:
                 print(f"gate  : {gate.get("mode", "skipped")}")
             if args.preview and pptx_out:
-                from .preview import rasterize_pptx
-                pv = rasterize_pptx(pptx_out, Path(args.out_dir) / f"{args.stem}-preview", dpi=args.preview_dpi)
+                pv = _rasterise_preview(pptx_out, Path(args.out_dir) / f"{args.stem}-preview", args.preview_dpi)
                 msg = f"preview: {len(pv)} page(s) -> {pv[0].parent}" if pv else "preview: no pages"
                 print(msg)
             ok = bool(pptx_out) and route_used != "designed" and not report.get("fallback_reason")
@@ -311,8 +327,7 @@ def main() -> int:
             print(f"facts : {'PASS' if outcome.fact_audit['passed'] else 'FAIL'} ({outcome.fact_audit['supported']}/{outcome.fact_audit['checked']} supported)")
         _write_json(Path(args.out_dir) / f"{args.stem}-build.json", outcome.to_dict())
         if args.preview:
-            from .preview import rasterize_pptx
-            pages = rasterize_pptx(outcome.pptx_path, Path(args.out_dir) / f"{args.stem}-preview", dpi=args.preview_dpi)
+            pages = _rasterise_preview(outcome.pptx_path, Path(args.out_dir) / f"{args.stem}-preview", args.preview_dpi)
             print(f"preview: {len(pages)} page(s) -> {pages[0].parent}" if pages else "preview: no pages")
         print(f"build : {'PASS' if outcome.ok else 'FAIL'} — {outcome.slide_count} slides")
         return 0 if outcome.ok else 2
@@ -325,8 +340,7 @@ def main() -> int:
         print(f"wrote {args.output}")
         return 0 if report.passed else 2
     if args.command == "preview":
-        from .preview import rasterize_pptx
-        pages = rasterize_pptx(args.source, args.output_dir, dpi=args.dpi)
+        pages = _rasterise_preview(args.source, args.output_dir, args.dpi)
         for page in pages:
             print(page)
         print(f"preview: {len(pages)} page(s)")

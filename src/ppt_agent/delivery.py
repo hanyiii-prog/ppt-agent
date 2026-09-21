@@ -10,6 +10,87 @@ from .visual_critic import CriticReport, VisualCritic, review_pages
 from .visual_regression import VisualReport, render_and_compare, render_pptx
 
 
+
+# The clone-route layout auditor (``clone_shell.audit_pages``) detects the real
+# content-page defects -- empty slides, duplicated headings, colliding text
+# boxes, stale placeholders and text overflow -- that the structural page gate
+# alone never saw. Historically those findings were only written to the report
+# and never affected pass/fail, so the gate kept blessing broken pages ("质检是
+# 摆设"). ``merge_layout_audit`` folds them into the page gate so a genuine
+# defect actually blocks delivery.
+#
+# Overflow is graded by severity: on a dark template the inherited number chips
+# and one-line titles routinely come within a few hundredths of an inch of their
+# fixed height (est/box ~ 1.1x), which is estimator noise. Only an overflow that
+# exceeds its box by more than OVERFLOW_HARD_TOL_IN is a hard failure; softer
+# estimates are surfaced as per-page warnings.
+OVERFLOW_HARD_TOL_IN = 0.5
+
+#: audit kinds that are always genuine defects (no estimator guesswork)
+_HARD_AUDIT_KINDS = ("empty", "duplicate", "collision", "stale_placeholder", "doubling")
+
+
+def _overflow_is_hard(msg: str, tol_in: float = OVERFLOW_HARD_TOL_IN) -> bool:
+    """True when an ``overflow`` message exceeds its box by more than *tol_in*."""
+    import re
+
+    m = re.search(r"est ([0-9.]+)in > box ([0-9.]+)in", msg)
+    if not m:
+        return True
+    return (float(m.group(1)) - float(m.group(2))) > tol_in
+
+
+def run_layout_audit(pptx: Path) -> list[dict]:
+    """Audit a finished deck's page layout; returns ``audit_pages`` issues."""
+    from pptx import Presentation
+
+    from .clone_shell import audit_pages
+
+    return audit_pages(Presentation(str(pptx)))
+
+
+def merge_layout_audit(
+    page_gate: DeckGateReport,
+    issues: list[dict],
+    *,
+    overflow_hard_tol_in: float = OVERFLOW_HARD_TOL_IN,
+) -> DeckGateReport:
+    """Fold layout-audit findings into the page gate and recompute ``passed``.
+
+    Genuine defects (empty/duplicate/collision/stale/doubling, and overflow past
+    the hard tolerance) append a blocking issue to the page. Marginal overflow
+    estimates become non-blocking ``layout_warnings``.
+    """
+    by_page: dict[int, dict[str, list[str]]] = {}
+    for issue in issues:
+        page = int(issue.get("page", 0))
+        kind = str(issue.get("kind", ""))
+        msg = str(issue.get("msg", kind))
+        # ``overflow`` is an *estimate* (python-pptx cannot measure real
+        # text layout), so it never hard-blocks: every finding is reported
+        # as a per-page warning, including the marginal estimates the
+        # heuristic inflates on large inherited titles. Only the
+        # deterministic defects fail a page.
+        if kind in _HARD_AUDIT_KINDS:
+            bucket = "hard"
+        elif kind == "overflow":
+            bucket = "warn"
+        else:
+            continue
+        entry = by_page.setdefault(page, {"hard": [], "warn": []})
+        entry[bucket].append(f"layout/{kind}: {msg}")
+    for gate in page_gate.pages:
+        entry = by_page.get(gate.page)
+        if not entry:
+            continue
+        if entry["hard"]:
+            gate.issues.extend(entry["hard"])
+            gate.passed = False
+        gate.layout_warnings.extend(entry["warn"])
+    page_gate.passed = bool(page_gate.pages) and all(p.passed for p in page_gate.pages)
+    return page_gate
+
+
 @dataclass(frozen=True)
 class DeliveryPolicy:
     """Hard release policy: one failed page blocks the whole deck."""
@@ -94,6 +175,7 @@ def validate_delivery(
     policy = policy or DeliveryPolicy()
     rendered = render_pptx(pptx, workspace / "rendered")
     page_gate = validate_rendered_pages(pptx, rendered, blank_threshold=policy.blank_threshold)
+    page_gate = merge_layout_audit(page_gate, run_layout_audit(pptx))
     critic_gate = review_pages(rendered, critic)
     visual_gate = None
     if reference_pptx is not None:

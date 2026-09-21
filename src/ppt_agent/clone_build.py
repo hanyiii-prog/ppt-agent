@@ -27,11 +27,12 @@ role                         builder
 ``closing``                  `rebuild_closing` (shell taken un-cleared;
                              bucket falls back to the cover pool because a
                              closing page reuses the cover shell)
-``section``                  `page_kits.chapter_page` (inherits the layout's
-                             rotated band)
-``toc``                      `page_kits.toc_page` (bucket falls back to the
-                             content pool -- a TOC is authored on the content
-                             shell, which carries the chrome)
+``section``                  `clone_shell.rebuild_section` (fills the divider
+                             shell's own text in place; only `chapter_page`
+                             when the shell has no box)
+``toc``                      `clone_shell.rebuild_toc` (fills the shell's
+                             repeated grid in place; only `toc_page` when it
+                             has no grid)
 ``content`` + ``kit``        `page_kits.content_header` + the named kit
 ===========================  ==============================================
 
@@ -296,14 +297,25 @@ def _role_of(spec: Any) -> str:
 
 
 def _check_capacity(deck: CloneShell, pages: list[dict[str, Any]]) -> None:
+    """Hard-fail ONLY when the template cannot supply a role at all.
+
+    Running short on a shared pool is not fatal: ``CloneShell._take`` falls back
+    to ``_duplicate_for_role`` (which clones the last used shell of that role),
+    so content pages and section pages can reuse a limited set of template
+    slides -- each still inherits its shell's real DNA. Rejecting the whole plan
+    here because it has more pages than the template has slides was the bug that
+    pushed the clone route into synthetic fallback for real decks. The only
+    condition we must refuse is a role whose every bucket pool is empty, because
+    duplication has nothing to clone from in that case.
+    """
     counts = deck.counts()
     problems = []
     for role in ROLE_BUCKETS:
         need = sum(1 for spec in pages if _role_of(spec) == role)
         available = sum(counts.get(bucket, 0) for bucket in ROLE_BUCKETS[role])
-        if need > available:
+        if need > 0 and available == 0:
             chain = " / ".join(ROLE_BUCKETS[role])
-            problems.append(f"{role}: need {need}, template has {available} ({chain})")
+            problems.append(f"{role}: need {need}, template has 0 ({chain})")
     if problems:
         raise CloneBuildError(
             "template cannot serve this page plan: " + "; ".join(problems)
@@ -311,17 +323,38 @@ def _check_capacity(deck: CloneShell, pages: list[dict[str, Any]]) -> None:
 
 
 def _take(deck: CloneShell, role: str, *, cleared: bool):
-    """Take a shell from the first bucket of ``role`` that still has one."""
+    """Take a shell for ``role`` -> ``(shell_index, slide, served_bucket)``.
+
+    Prefer a fresh one from any bucket in the role's chain; when the pools are
+    exhausted, duplicate the most recent shell of that role so the page still
+    inherits real template DNA instead of the whole plan being rejected. The
+    ``served_bucket`` lets the caller tell a page that landed on its *own* role
+    shell from one that had to *borrow* a neighbour's (e.g. a TOC drawn on the
+    content shell of a template with no dedicated TOC) -- only the former carries
+    a checkable expected page kind.
+    """
     last: ShellExhausted | None = None
     for bucket in ROLE_BUCKETS[role]:
         try:
-            return deck.take(bucket, cleared=cleared)
+            shell_index, slide = deck.take(bucket, cleared=cleared)
+            return shell_index, slide, bucket
         except ShellExhausted as exc:
             last = exc
-    raise CloneBuildError(
-        f"no shell left for role {role!r} "
-        f"(buckets: {' / '.join(ROLE_BUCKETS[role])}): {last}"
-    )
+    # Every distinct shell in the chain is used -- clone the last one of the
+    # primary bucket rather than failing. _duplicate_for_role falls back to
+    # reusing any used shell (or slide 0) if this role has none of its own.
+    try:
+        shell_index, slide = deck._duplicate_for_role(
+            ROLE_BUCKETS[role][0], cleared=cleared)
+        # A duplicated shell may carry any neighbour's DNA, so its real page
+        # kind is unknowable here -- return None and let the caller skip the
+        # expected-kind anchor instead of pinning a false one.
+        return shell_index, slide, None
+    except Exception:
+        raise CloneBuildError(
+            f"no shell left for role {role!r} "
+            f"(buckets: {' / '.join(ROLE_BUCKETS[role])}): {last}"
+        ) from None
 
 
 def _render_cover(slide: Any, spec: dict[str, Any], prs: Any) -> list[str]:
@@ -351,30 +384,52 @@ def _render_closing(slide: Any, spec: dict[str, Any], prs: Any) -> list[str]:
 
 
 def _render_section(slide: Any, spec: dict[str, Any], prs: Any) -> list[str]:
-    from .page_kits import chapter_page
+    """Render a divider page: edit the template shell's OWN text in place, and
+    only fall back to a hand-drawn divider (with the inherited foreground) when
+    the shell carries no suitable text box."""
+    from .clone_shell import rebuild_section, slide_foreground
 
-    lines = spec.get("lines") or []
-    if isinstance(lines, str):
-        lines = [ln for ln in lines.split("\n") if ln.strip()]
-    chapter_page(slide, str(spec.get("title") or ""), list(lines), prs=prs)
-    return []
+    title = str(spec.get("title") or "")
+    meta = str(spec.get("meta") or spec.get("byline") or "")
+    num = str(spec.get("chapter_num") or spec.get("number") or "")
+    if rebuild_section(
+        slide, prs=prs, title_text=title, meta_text=meta, chapter_num=num,
+    ):
+        return []
+    # The served shell had no text boxes to write into -- this happens when a
+    # content/divider bucket is exhausted and a bare shell is borrowed. Draw the
+    # divider synthetically, but keep the template's own contrast colour.
+    from . import page_kits as K
+
+    lines = spec.get("lines") or spec.get("sub_points") or []
+    K.chapter_page(slide, title or num, lines, prs=prs,
+                   fg=slide_foreground(slide))
+    return [f"section page: shell had no divider text box; drew a synthetic "
+            f"divider (degraded fidelity)"]
 
 
 def _render_toc(slide: Any, spec: dict[str, Any], prs: Any) -> list[str]:
-    from .page_kits import toc_page
+    """Render a table-of-contents page: fill the shell's own repeated grid in
+    place, and fall back to the synthetic TOC kit only when it has no grid."""
+    from .clone_shell import rebuild_toc, slide_foreground
 
-    note = spec.get("note")
-    if isinstance(note, str):
-        note = [ln for ln in note.split("\n") if ln.strip()]
-    toc_page(
+    if rebuild_toc(
         slide,
-        spec.get("items") or [],
-        note,
-        title=str(spec.get("title") or "目录"),
-        title_en=str(spec.get("title_en") or "CONTENTS"),
         prs=prs,
-    )
-    return []
+        items=spec.get("items") or [],
+        title_text=str(spec.get("title") or ""),
+        title_en=str(spec.get("title_en") or ""),
+    ):
+        return []
+    # No TOC grid on this shell -- author the page from scratch (degraded: the
+    # synthetic grid uses the deck palette, not the template's own).
+    from . import page_kits as K
+
+    K.toc_page(slide, spec.get("items") or [], spec.get("note"),
+               title=str(spec.get("title") or "目录"),
+               title_en=str(spec.get("title_en") or "CONTENTS"), prs=prs)
+    return [f"toc page: shell had no repeated TOC grid; drew a synthetic "
+            f"contents page (degraded fidelity)"]
 
 
 def _render_content(slide: Any, spec: dict[str, Any], prs: Any, index: int) -> list[str]:
@@ -518,11 +573,15 @@ def render_clone_deck(
         _check_capacity(deck, pages)
         for index, spec in enumerate(pages, 1):
             role = _role_of(spec)
-            cleared = role not in ("cover", "closing")
-            shell_index, slide = _take(deck, role, cleared=cleared)
+            cleared = role not in ("cover", "closing", "section", "toc")
+            shell_index, slide, served_bucket = _take(deck, role, cleared=cleared)
             # the clone route keeps the TEMPLATE's page order: the shell that
-            # served this spec lands at output page shell_index + 1
-            if role in verifiable:
+            # served this spec lands at output page shell_index + 1. Anchor a
+            # verifiable page kind ONLY when the shell is the role's own -- a
+            # template without a divider/TOC shell legitimately serves those
+            # pages from the content shell, and their DNA is the content page's;
+            # expecting "section"/"toc" there would be a false fidelity failure.
+            if role in verifiable and served_bucket == role:
                 expected_kinds[shell_index + 1] = role
             if role == "cover":
                 warnings.extend(_render_cover(slide, spec, deck.prs))

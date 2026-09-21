@@ -1,4 +1,4 @@
-﻿"""The V2.2 end-to-end pipeline: every layer, one honest report.
+"""The V2.2 end-to-end pipeline: every layer, one honest report.
 
 Route resolution is automatic:
 * ``template_dna`` provided -> **clone route** (template chrome inherited verbatim)
@@ -16,6 +16,7 @@ caps content pages. The report states what was condensed and why.
 from __future__ import annotations
 
 import copy as _copy
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -188,63 +189,168 @@ def _archetype_to_kit(archetype: str, item_count: int, rotation: int = 0) -> str
     return kit if kit in KITS else "column_cards"
 
 
-def _blocks_to_quad_cards(blocks: list, *, page_title: str = "") -> list[dict[str, Any]]:
-    """Format for quad_cards: {"title", "body", "icon"}"""
-    cards = []
-    icons = ["⚙", "📊", "🔬", "🎯"]
-    pt = page_title.strip()
-    for i, block in enumerate(blocks):
-        if block.type in ("bullets", "ordered") and block.items:
-            for j, item in enumerate(block.items[:4]):
-                parts = item.split("：", 1) if "：" in item else item.split(":", 1)
-                if len(parts) > 1:
-                    title = parts[0].strip()[:15]
-                    body = parts[1].strip()
-                elif len(item) > 20:
-                    title = item[:15]
-                    body = item[15:]
+_CARD_LEAD_RE = re.compile(r"^\s*([^：:。.;；]{2,12})[：:。.;；]\s*")
+
+
+def _split_card_text(text: str) -> tuple[str, str]:
+    """Split one source line into a short card title and its body.
+
+    Used only for the fallback path (multi-item bullet lists and unpaired
+    prose). Two invariants, both tied to the "blank control" and "duplicated
+    heading" defects seen in the rendered deck:
+
+    * the title is never a prefix (or copy) of the body, and
+    * a card with substantial text never renders a blank body.
+
+    We cut on a real lead-in (``X：rest``) when present, otherwise on the first
+    clause separator near the front, so title and body are disjoint. Only a
+    genuinely short line keeps its whole text as a title with no body.
+    """
+    text = (text or "").strip()
+    if not text:
+        return "", ""
+    m = _CARD_LEAD_RE.match(text)
+    if m:
+        head = m.group(1).strip()
+        rest = text[m.end():].strip()
+        if rest and rest != head:
+            return head[:14], rest
+    # Cut at the first clause separator reasonably early so the title is a
+    # natural phrase, not a mid-sentence fragment, and the body starts right
+    # after it (disjoint from the title).
+    for i, ch in enumerate(text):
+        if ch in "，、,；;" and 2 <= i <= 14:
+            head = text[:i].strip()
+            rest = text[i + 1:].strip()
+            if rest:
+                return head[:14], rest
+    if len(text) <= 14:
+        return text, ""
+    # Long single-clause prose with no early separator: hard-cut at 12 so the
+    # title and body stay disjoint and nothing is lost.
+    return text[:12], text[12:].strip()
+
+
+_TITLE_BLOCK_MAX = 26
+
+
+def _looks_like_title(text: str) -> bool:
+    """A short, colon-free run suitable as a card heading (e.g. the single
+    item of ``1. 顶层指导方针``). Long prose is not a title."""
+    t = (text or "").strip()
+    if not t or len(t) > _TITLE_BLOCK_MAX:
+        return False
+    if re.search(r"[：:。.;；]", t):
+        return False
+    return True
+
+
+def _pair_title_body(blocks: list) -> list[dict[str, Any]]:
+    """Collapse the parser's block stream into logical cards.
+
+    The markdown parser emits a *title* block (a heading, or a one-item list
+    such as ``1. 顶层指导方针``) followed by a separate *body* block (a paragraph
+    or a multi-item list). Iterating them independently painted a title-only
+    card with an empty body right next to a re-titled body card -- the "blank
+    control" and "duplicated heading" defects seen in the rendered deck.
+    Pairing each title with the block that follows it yields one full card per
+    source item. Tables pass through as ``{"table": block}``.
+    """
+    out: list[dict[str, Any]] = []
+    i, n = 0, len(blocks)
+    while i < n:
+        b = blocks[i]
+        if b.type == "table":
+            out.append({"title": "", "body": "", "items": [], "table": b})
+            i += 1
+            continue
+        is_list = b.type in ("bullets", "ordered")
+        single_item = is_list and bool(b.items) and len(b.items) == 1
+        title_text = ""
+        if b.type == "heading":
+            title_text = (b.text or "").strip()
+        elif single_item:
+            title_text = b.items[0].strip()
+
+        if _looks_like_title(title_text):
+            body = ""
+            items: list[str] = []
+            if i + 1 < n:
+                nb = blocks[i + 1]
+                if nb.type == "paragraph" and nb.text:
+                    body = nb.text.strip()
+                    i += 2
+                elif nb.type in ("bullets", "ordered") and nb.items:
+                    items = [x.strip() for x in nb.items if x.strip()]
+                    i += 2
                 else:
-                    title = item
-                    body = ""
-                cards.append({"title": title, "body": body, "icon": icons[j % 4]})
-        elif block.text:
-            if pt and block.text.strip() == pt:
-                continue
-            parts = block.text.split("：", 1) if "：" in block.text else block.text.split(":", 1)
-            title = parts[0].strip()[:15] if len(parts) > 1 else block.text[:15]
-            body = parts[1].strip() if len(parts) > 1 else block.text
-            cards.append({"title": title, "body": body, "icon": icons[i % 4]})
-    return cards[:4]
+                    i += 1
+            else:
+                i += 1
+            out.append({"title": title_text, "body": body, "items": items})
+            continue
+
+        body = (b.text or "").strip() if b.type == "paragraph" else ""
+        items = [x.strip() for x in b.items if x.strip()] if is_list and b.items else []
+        out.append({"title": "", "body": body, "items": items})
+        i += 1
+    return out
 
 
 def _blocks_to_column_cards(blocks: list, *, page_title: str = "") -> list[dict[str, Any]]:
     """Format for column_cards: {"title", "sub", "lines": [...], "grad": bool}"""
     cards = []
     pt = page_title.strip()
-    for block in blocks:
-        if block.type in ("bullets", "ordered") and block.items:
-            for item in block.items:
-                if pt and item.strip() == pt:
-                    continue
-                parts = item.split("：", 1) if "：" in item else item.split(":", 1)
-                if len(parts) == 2:
-                    cards.append({"title": parts[0].strip()[:12], "lines": [parts[1].strip()], "grad": True})
-                else:
-                    cards.append({"title": "", "lines": [item], "grad": True})
-        elif block.type == "table":
-            for row in block.rows:
+    for grp in _pair_title_body(blocks):
+        if grp.get("table") is not None:
+            for row in grp["table"].rows:
                 title = row[0] if row else ""
                 lines = [c for c in row[1:] if c]
                 cards.append({"title": title[:12], "lines": lines, "grad": True})
-        elif block.text:
-            if pt and block.text.strip() == pt:
+            continue
+        if grp["title"]:
+            title = grp["title"][:20]
+            if pt and title == pt:
                 continue
-            parts = block.text.split("：", 1) if "：" in block.text else block.text.split(":", 1)
-            if len(parts) == 2:
-                cards.append({"title": parts[0].strip()[:12], "lines": [parts[1].strip()], "grad": True})
-            else:
-                cards.append({"title": block.text[:12], "lines": [block.text], "grad": True})
+            lines = grp["items"] or ([grp["body"]] if grp["body"] else [])
+            cards.append({"title": title, "lines": list(lines), "grad": True})
+            continue
+        texts = grp["items"] or ([grp["body"]] if grp["body"] else [])
+        for item in texts:
+            if pt and item.strip() == pt:
+                continue
+            title, body = _split_card_text(item)
+            cards.append({"title": title, "lines": [body] if body else [], "grad": True})
     return cards
+
+
+def _blocks_to_quad_cards(blocks: list, *, page_title: str = "") -> list[dict[str, Any]]:
+    """Format for quad_cards: {"title", "body", "icon"}"""
+    icons = ["\u2699", "\U0001f4ca", "\U0001f52c", "\U0001f3af"]
+    cards = []
+    pt = page_title.strip()
+    for grp in _pair_title_body(blocks):
+        if grp.get("table") is not None:
+            for row in grp["table"].rows:
+                title = row[0] if row else ""
+                body = "\uff1b".join(c for c in row[1:] if c)
+                cards.append({"title": title[:14], "body": body,
+                              "icon": icons[len(cards) % 4]})
+            continue
+        if grp["title"]:
+            title = grp["title"][:18]
+            if pt and title == pt:
+                continue
+            body = grp["body"] or "\uff1b".join(grp["items"])
+            cards.append({"title": title, "body": body, "icon": icons[len(cards) % 4]})
+            continue
+        texts = grp["items"] or ([grp["body"]] if grp["body"] else [])
+        for item in texts:
+            if pt and item.strip() == pt:
+                continue
+            title, body = _split_card_text(item)
+            cards.append({"title": title, "body": body, "icon": icons[len(cards) % 4]})
+    return cards[:4]
 
 
 def _blocks_to_steps(blocks: list) -> list[dict[str, Any]]:
@@ -421,12 +527,23 @@ def _plan_to_clone_pages(
             # card titles duplicating the page header)
             lead_blocks = [lookup[bid] for bid in page.get("source_blocks") or [] if bid in lookup]
             lead_text = ""
+            lead_source = ""
             for lb in lead_blocks:
                 if lb.type in ("heading", "paragraph") and lb.text and not lead_text:
                     lead_text = lb.text[:40]
+                    lead_source = lb.text.strip()
                     break
             if lead_text == page_title:
                 lead_text = ""
+            # The lead renders in the page header (title + sub-heading). Drop
+            # that same block from the card inputs so it is not painted a
+            # second time inside a card (the "duplicated heading" defect).
+            if lead_source:
+                blocks = [
+                    b for b in blocks
+                    if not (b.type in ("heading", "paragraph")
+                            and (b.text or "").strip() == lead_source)
+                ]
             spec: dict[str, Any] = {
                 "role": "content",
                 "kit": kit,
@@ -527,25 +644,63 @@ def run_pipeline(
     design_plan_source = "auto"
     rendered_pages: int | None = None
     if route == "clone" and template_path:
-        from ..blank_deck import render_blank_deck
         pptx_path = out / "deck.pptx"
         if design_plan:
             clone_pages = _coerce_design_plan(design_plan)
             design_plan_source = "external"
         else:
             clone_pages = _plan_to_clone_pages(annotated, document)
+        # PREFERRED: clone the template's own page shells (byte-identical
+        # chrome, inherited DNA per page kind). Only if the real clone path
+        # cannot serve the plan do we degrade to synthetic blank-layout
+        # drawing -- and that degradation is disclosed, never silent.
+        from ..clone_build import render_clone_deck
         try:
-            clone_result = render_blank_deck(clone_pages, pptx_path, design_dna=design_dna,
-                                      assets_dir=assets_dir)
+            clone_result = render_clone_deck(
+                template_path, clone_pages, pptx_path,
+                audit=False, fidelity=True,
+            )
             artifacts["pptx"] = str(pptx_path)
             rendered_pages = int(clone_result.get("pages") or len(clone_pages))
-            artifacts["clone_audit"] = {"warnings": clone_result.get("warnings", [])}
+            artifacts["clone_audit"] = {
+                "warnings": clone_result.get("warnings", []),
+                "fidelity": clone_result.get("fidelity", {}),
+                "structural_qc": clone_result.get("structural_qc", []),
+            }
             audit_report = {"warnings": clone_result.get("warnings", [])}
-            repair_report = {"stop_reason": "clone (blank layout)", "residual_count": 0}
-        except Exception as clone_exc:
-            route = "designed"
-            fallback_reason = str(clone_exc)
-            repair_report = {"stop_reason": f"clone fallback: {clone_exc}", "residual_count": -1, "fallback_reason": str(clone_exc)}
+            fidelity_gate = clone_result.get("fidelity") or {}
+            if not fidelity_gate.get("passed", True):
+                fallback_reason = "clone chrome-fidelity gate reported failures"
+            repair_report = {
+                "stop_reason": "clone (template shell)", "residual_count": 0,
+                "fidelity_passed": fidelity_gate.get("passed"),
+            }
+        except Exception as shell_clone_exc:
+            # The faithful shell clone refused the plan (e.g. capacity). Degrade
+            # to the synthetic Kimi-style blank route, but say so loudly.
+            from ..blank_deck import render_blank_deck
+            try:
+                clone_result = render_blank_deck(
+                    clone_pages, pptx_path, design_dna=design_dna,
+                    assets_dir=assets_dir,
+                )
+                artifacts["pptx"] = str(pptx_path)
+                rendered_pages = int(clone_result.get("pages") or len(clone_pages))
+                artifacts["clone_audit"] = {"warnings": clone_result.get("warnings", [])}
+                audit_report = {"warnings": clone_result.get("warnings", [])}
+                fallback_reason = (
+                    "shell-clone unavailable, degraded to synthetic blank layout: "
+                    f"{shell_clone_exc}"
+                )
+                repair_report = {
+                    "stop_reason": "clone (synthetic fallback)",
+                    "residual_count": 0,
+                    "fallback_reason": str(shell_clone_exc),
+                }
+            except Exception as clone_exc:
+                route = "designed"
+                fallback_reason = str(clone_exc)
+                repair_report = {"stop_reason": f"clone fallback: {clone_exc}", "residual_count": -1, "fallback_reason": str(clone_exc)}
 
     if route == "designed":
         from ..agent.plan_to_ir import plan_to_ir
