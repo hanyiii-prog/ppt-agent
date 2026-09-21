@@ -153,33 +153,54 @@ def condense_plan(
 
 # ---- clone page spec builder ----------------------------------------------
 
-def _archetype_to_kit(archetype: str, item_count: int) -> str:
+_KIT_ROTATION: dict[str, list[str]] = {
+    "cards_grid": ["quad_cards", "column_cards", "stage_cards"],
+    "metrics_row": ["quad_cards", "stage_cards", "column_cards"],
+    "timeline": ["progress_timeline", "stage_timeline"],
+    "comparison": ["two_panel_list", "column_cards"],
+    "table_page": ["column_cards", "stage_cards"],
+    "narrative": ["column_cards", "stage_cards"],
+    "quote_strip": ["column_cards"],
+    "title_bullets": ["quad_cards", "column_cards", "stage_cards"],
+}
+
+
+def _archetype_to_kit(archetype: str, item_count: int, rotation: int = 0) -> str:
     from ..clone_build import KITS
-    if item_count <= 4 and archetype in ("cards_grid", "metrics_row"):
-        kit = "quad_cards"
-    elif archetype == "timeline":
-        kit = "progress_timeline"
-    elif archetype == "comparison":
-        kit = "two_panel_list"
-    elif archetype == "metrics_row":
-        kit = "stage_cards"
-    else:
+    candidates = _KIT_ROTATION.get(archetype, ["column_cards"])
+    kit = candidates[rotation % len(candidates)]
+    # item-count guards
+    if kit == "quad_cards" and item_count > 6:
         kit = "column_cards"
+    elif kit == "two_panel_list" and item_count < 2:
+        kit = "column_cards"
+    elif kit == "org_chart" and item_count < 3:
+        kit = "quad_cards"
     return kit if kit in KITS else "column_cards"
 
 
-def _blocks_to_quad_cards(blocks: list) -> list[dict[str, Any]]:
+def _blocks_to_quad_cards(blocks: list, *, page_title: str = "") -> list[dict[str, Any]]:
     """Format for quad_cards: {"title", "body", "icon"}"""
     cards = []
     icons = ["⚙", "📊", "🔬", "🎯"]
+    pt = page_title.strip()
     for i, block in enumerate(blocks):
         if block.type in ("bullets", "ordered") and block.items:
             for j, item in enumerate(block.items[:4]):
                 parts = item.split("：", 1) if "：" in item else item.split(":", 1)
-                title = parts[0].strip()[:15] if len(parts) > 1 else item[:15]
-                body = parts[1].strip() if len(parts) > 1 else item
+                if len(parts) > 1:
+                    title = parts[0].strip()[:15]
+                    body = parts[1].strip()
+                elif len(item) > 20:
+                    title = item[:15]
+                    body = item[15:]
+                else:
+                    title = item
+                    body = ""
                 cards.append({"title": title, "body": body, "icon": icons[j % 4]})
         elif block.text:
+            if pt and block.text.strip() == pt:
+                continue
             parts = block.text.split("：", 1) if "：" in block.text else block.text.split(":", 1)
             title = parts[0].strip()[:15] if len(parts) > 1 else block.text[:15]
             body = parts[1].strip() if len(parts) > 1 else block.text
@@ -187,23 +208,28 @@ def _blocks_to_quad_cards(blocks: list) -> list[dict[str, Any]]:
     return cards[:4]
 
 
-def _blocks_to_column_cards(blocks: list) -> list[dict[str, Any]]:
+def _blocks_to_column_cards(blocks: list, *, page_title: str = "") -> list[dict[str, Any]]:
     """Format for column_cards: {"title", "sub", "lines": [...], "grad": bool}"""
     cards = []
+    pt = page_title.strip()
     for block in blocks:
         if block.type in ("bullets", "ordered") and block.items:
             for item in block.items:
+                if pt and item.strip() == pt:
+                    continue
                 parts = item.split("：", 1) if "：" in item else item.split(":", 1)
                 if len(parts) == 2:
                     cards.append({"title": parts[0].strip()[:12], "lines": [parts[1].strip()], "grad": True})
                 else:
-                    cards.append({"title": item[:12], "lines": [item], "grad": True})
+                    cards.append({"title": "", "lines": [item], "grad": True})
         elif block.type == "table":
             for row in block.rows:
                 title = row[0] if row else ""
                 lines = [c for c in row[1:] if c]
                 cards.append({"title": title[:12], "lines": lines, "grad": True})
         elif block.text:
+            if pt and block.text.strip() == pt:
+                continue
             parts = block.text.split("：", 1) if "：" in block.text else block.text.split(":", 1)
             if len(parts) == 2:
                 cards.append({"title": parts[0].strip()[:12], "lines": [parts[1].strip()], "grad": True})
@@ -250,6 +276,8 @@ def _blocks_to_stages(blocks: list) -> list[dict[str, str]]:
     for block in blocks:
         if block.type in ("bullets", "ordered") and block.items:
             for item in block.items:
+                if pt and item.strip() == pt:
+                    continue
                 parts = item.split("：", 1) if "：" in item else item.split(":", 1)
                 head = parts[0].strip()[:10] if len(parts) > 1 else item[:10]
                 desc = parts[1].strip() if len(parts) > 1 else item
@@ -273,6 +301,8 @@ def _plan_to_clone_pages(
 
     doc_title = document.title or "Presentation"
     pages: list[dict[str, Any]] = []
+    _content_rotation = 0
+    _section_count = 1
 
     for page in plan.get("pages") or []:
         kind = str(page.get("kind") or "content")
@@ -284,12 +314,25 @@ def _plan_to_clone_pages(
                 "role": "cover",
                 "pill": "汇报",
                 "title": page.get("title") or doc_title,
-                "meta": doc_title,
+                "meta": "2026年9月",
             })
         elif kind == "toc":
             items = []
-            for i, title in enumerate(section_titles):
-                items.append({"title": title, "sub": ""})
+            for sec_page in (plan.get("pages") or []):
+                if sec_page.get("kind") != "section":
+                    continue
+                st = str(sec_page.get("title") or "")
+                sub_blocks = [lookup.get(bid) for bid in (sec_page.get("source_blocks") or []) if bid in lookup]
+                subs = []
+                for b in sub_blocks:
+                    if b.type in ("bullets", "ordered") and b.items:
+                        subs.extend(b.items[:4])
+                    elif b.text:
+                        subs.append(b.text)
+                sub_text = " · ".join(subs[:4]) if subs else ""
+                if sub_text == st:
+                    sub_text = ""
+                items.append({"title": st, "sub": sub_text})
             pages.append({
                 "role": "toc",
                 "title": "目录",
@@ -310,7 +353,9 @@ def _plan_to_clone_pages(
                 "role": "section",
                 "title": page.get("title") or "",
                 "lines": lines[:3],
+                "chapter_num": f"{_section_count:02d}",
             })
+            _section_count += 1
         elif kind == "closing":
             pages.append({
                 "role": "closing",
@@ -319,14 +364,27 @@ def _plan_to_clone_pages(
                 "meta": doc_title,
             })
         else:
-            kit = _archetype_to_kit(archetype, len(blocks))
+            kit = _archetype_to_kit(archetype, len(blocks), rotation=_content_rotation)
+            _content_rotation += 1
+            page_title = page.get("title") or ""
+            # filter out blocks whose text matches the page title (avoids
+            # card titles duplicating the page header)
+            lead_blocks = [lookup[bid] for bid in page.get("source_blocks") or [] if bid in lookup]
+            lead_text = ""
+            for lb in lead_blocks:
+                if lb.type in ("heading", "paragraph") and lb.text and not lead_text:
+                    lead_text = lb.text[:40]
+                    break
+            if lead_text == page_title:
+                lead_text = ""
             spec: dict[str, Any] = {
                 "role": "content",
                 "kit": kit,
-                "title": page.get("title") or "",
+                "title": page_title,
+                "lead": lead_text or None,
             }
             if kit == "quad_cards":
-                spec["cards"] = _blocks_to_quad_cards(blocks)
+                spec["cards"] = _blocks_to_quad_cards(blocks, page_title=page_title)
             elif kit == "progress_timeline":
                 spec["steps"] = _blocks_to_steps(blocks)
             elif kit == "two_panel_list":
@@ -336,7 +394,7 @@ def _plan_to_clone_pages(
             elif kit == "stage_cards":
                 spec["stages"] = _blocks_to_stages(blocks)
             else:
-                spec["cards"] = _blocks_to_column_cards(blocks)
+                spec["cards"] = _blocks_to_column_cards(blocks, page_title=page_title)
             pages.append(spec)
 
     return pages
@@ -403,17 +461,15 @@ def run_pipeline(
     fallback_reason: str | None = None
 
     if route == "clone" and template_path:
-        from ..clone_build import render_clone_deck
+        from ..blank_deck import render_blank_deck
         pptx_path = out / "deck.pptx"
         clone_pages = _plan_to_clone_pages(annotated, document)
         try:
-            clone_result = render_clone_deck(
-                template_path, clone_pages, pptx_path, audit=True, fidelity=True,
-            )
+            clone_result = render_blank_deck(clone_pages, pptx_path, design_dna=design_dna)
             artifacts["pptx"] = str(pptx_path)
-            artifacts["clone_audit"] = clone_result.get("audit") or {}
-            audit_report = clone_result.get("audit") or {}
-            repair_report = {"stop_reason": "clone (template geometry preserved)", "residual_count": 0}
+            artifacts["clone_audit"] = {"warnings": clone_result.get("warnings", [])}
+            audit_report = {"warnings": clone_result.get("warnings", [])}
+            repair_report = {"stop_reason": "clone (blank layout)", "residual_count": 0}
         except Exception as clone_exc:
             route = "designed"
             fallback_reason = str(clone_exc)
@@ -492,3 +548,7 @@ def run_pipeline(
         },
         "metadata": {"llm": narrative["metadata"]["llm"], "pipeline": f"{route}+rules"},
     }
+
+
+
+

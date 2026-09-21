@@ -423,6 +423,62 @@ def _render_content(slide: Any, spec: dict[str, Any], prs: Any, index: int) -> l
     return warnings
 
 
+def _structural_qc(pptx_path: str | Path) -> list[dict[str, Any]]:
+    """Post-render structural checks that XML audit misses.
+
+    Detects: empty text boxes, duplicate title text across shapes,
+    and CJK-aware text overflow estimation per text frame.
+    """
+    from pptx import Presentation as _Prs
+    from .clone_shell import rotated_bbox
+
+    issues: list[dict[str, Any]] = []
+    prs = _Prs(str(pptx_path))
+    for pi, slide in enumerate(prs.slides, 1):
+        titles: list[str] = []
+        for sh in slide.shapes:
+            if not sh.has_text_frame:
+                continue
+            text = (sh.text_frame.text or "").strip()
+            # only flag TEXT_BOX shapes as empty; decorative ovals/bars are fine
+            is_textbox = "TextBox" in (sh.name or "") or "TEXT_BOX" in str(sh.shape_type)
+            if not text and is_textbox:
+                issues.append({
+                    "page": pi, "kind": "empty_textbox",
+                    "msg": f"shape '{sh.name}' has no text",
+                })
+                continue
+            # duplicate title check (same text appearing twice on a page)
+            if len(text) >= 4 and text in titles:
+                issues.append({
+                    "page": pi, "kind": "duplicate_title",
+                    "msg": f'"{text[:30]}" appears more than once on page {pi}',
+                })
+            if len(text) >= 4:
+                titles.append(text)
+            # CJK-aware overflow estimate
+            try:
+                L, T, W, H = rotated_bbox(sh)
+            except (TypeError, ZeroDivisionError):
+                continue
+            if W <= 0 or H <= 0:
+                continue
+            cjk_count = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+            total_chars = len(text)
+            if total_chars == 0:
+                continue
+            avg_char_w = 0.15  # inches, approximate for 14pt CJK
+            chars_per_line = max(1, int(W / avg_char_w))
+            est_lines = max(1, -(-total_chars // chars_per_line))
+            est_height = est_lines * 0.24  # 0.24in per line at ~14pt
+            if est_height > H * 1.15:
+                issues.append({
+                    "page": pi, "kind": "text_overflow",
+                    "msg": f'estimated text height {est_height:.2f}in > box {H:.2f}in',
+                })
+    return issues
+
+
 def render_clone_deck(
     template: str | Path,
     pages: list[dict[str, Any]],
@@ -490,6 +546,9 @@ def render_clone_deck(
     }
     if audit:
         result["audit"] = audit_deck(output)
+
+    # -- structural QC: empty text, duplicate titles, overflow estimation --
+    result["structural_qc"] = _structural_qc(output)
 
     roles = [_role_of(spec) for spec in pages]
     if fidelity:

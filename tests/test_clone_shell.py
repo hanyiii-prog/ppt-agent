@@ -50,9 +50,9 @@ def test_take_clears_body_and_set_title(mini_template):
     d = CloneShell(mini_template, ROLE_MAP)
     idx, sl = d.take("content")
     assert idx == 2
-    assert set_title(sl, "hello")
-    texts = [sh.text_frame.text for sh in sl.shapes if sh.has_text_frame]
-    assert any("hello" in t for t in texts)
+    # C-route: no placeholder survives take(); all text is drawn by kits.
+    assert not list(sl.placeholders)
+    assert not set_title(sl, "hello")
     d.close()
 
 
@@ -175,9 +175,8 @@ def test_add_content_chrome_clears_template_decorations(mini_template):
     # no leftover stray text
     assert not any("旧装饰" in (s.text_frame.text or "")
                    for s in sl.shapes if s.has_text_frame)
-    assert set_title(sl, "新标题", reposition=(0.80, 0.46))
-    ph0 = [s for s in sl.shapes if s.is_placeholder and s.placeholder_format.idx == 0][0]
-    assert abs(ph0.top - 0.80 * 914400) < 5000, "title not repositioned below bar"
+    # C-route: no placeholder survives; the chrome is layout-inherited.
+    assert not list(sl.placeholders)
     d.close()
 
 
@@ -528,4 +527,3 @@ def test_audit_flags_stale_placeholder_that_would_paint_the_prompt(mini_template
     drop_empty_placeholders(page3)
     assert not any(i["page"] == 3 and i["kind"] == "stale_placeholder"
                    for i in audit_pages(prs))
-

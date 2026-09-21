@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """clone_shell -- template-page cloning renderer for ppt-agent.
 
 Why this exists
@@ -111,7 +111,7 @@ def _is_body_placeholder(shape) -> bool:
         return False
 
 
-def clear_body(slide, keep: Iterable[int] = (0,)) -> int:
+def clear_body(slide, keep: Iterable[int] = ()) -> int:
     """Delete every non-placeholder shape; optionally keep some placeholders.
 
     ``keep`` lists placeholder idx values to preserve (default: title only).
@@ -656,6 +656,37 @@ class CloneShell:
             clear_body(sl)
         return idx, sl
 
+
+    def _duplicate_for_role(self, role: str, *, cleared: bool = True):
+        """Duplicate the last used shell of this role when the pool is exhausted."""
+        import copy
+        from lxml import etree
+        pool = self.buckets.get(role) or []
+        candidates = [idx for idx in pool if idx in self.used]
+        if not candidates:
+            candidates = list(self.used)
+        if not candidates:
+            candidates = [0]
+        src_idx = candidates[-1]
+        src_slide = self.prs.slides[src_idx]
+        # deep-copy the slide XML and append it
+        slide_count = len(self.prs.slides._sldIdLst)
+        self.prs.slides.add_slide(src_slide.slide_layout)
+        new_idx = len(self.prs.slides._sldIdLst) - 1
+        new_slide = self.prs.slides[new_idx]
+        # copy shapes from source
+        for shape in list(new_slide.shapes):
+            shape._element.getparent().remove(shape._element)
+        for shape in src_slide.shapes:
+            el = copy.deepcopy(shape._element)
+            new_slide.shapes._spTree.append(el)
+        if cleared:
+            clear_body(new_slide)
+        self.used.add(new_idx)
+        self.buckets.setdefault(role, []).append(new_idx)
+        self._assigned.append((new_idx, role))
+        return new_idx, new_slide
+
     def assign(self, idx: int, role: str = "custom", cleared: bool = True):
         """Pin a specific template slide (e.g. the real cover with its photo)."""
         if idx in self.used:
@@ -908,3 +939,5 @@ def gradient_fill(shape, stops, angle: float = 0.0, *,
     if rot_with_shape is not None:
         grad.set('rotWithShape', '1' if rot_with_shape else '0')
     return shape
+
+

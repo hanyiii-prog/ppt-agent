@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """page_kits -- reusable page-composition kits for the clone-shell route.
 
 Learned from the Kimi v1 -> v2 revision of the 专病数据库 deck (2026-09). Each
@@ -192,33 +192,9 @@ def content_header(slide, title, lead=None, *, prs=None, title_size=20,
     title text in PH0 and it shows through as a stale/duplicate heading.
     """
     add_content_chrome(slide, prs=prs)          # inherits when the layout has it
-    wrote = False
-    for sh in slide.shapes:
-        if sh.is_placeholder and sh.placeholder_format.idx == 0:
-            sh.left, sh.top = Inches(TITLE_X), Inches(TITLE_Y)
-            sh.width, sh.height = Inches(TITLE_W), Inches(TITLE_H)
-            tf = sh.text_frame
-            tf.word_wrap = True
-            tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-            tf.margin_left = tf.margin_right = 0
-            tf.margin_top = tf.margin_bottom = 0
-            paras = list(tf.paragraphs)
-            for p in paras[1:]:
-                p._p.getparent().remove(p._p)
-            p0 = tf.paragraphs[0]
-            for r in list(p0.runs):
-                r._r.getparent().remove(r._r)
-            r = p0.add_run()
-            r.text = title
-            r.font.size = Pt(title_size)
-            r.font.bold = True
-            r.font.name = FONT
-            r.font.color.rgb = RGBColor.from_string(PD)
-            wrote = True
-            break
-    if not wrote:
-        _tb(slide, TITLE_X, TITLE_Y, TITLE_W, TITLE_H, title, size=title_size,
-            color=PD, bold=True)
+    # Always draw a fresh title text box (C-route: no placeholder dependency).
+    _tb(slide, TITLE_X, TITLE_Y, TITLE_W, TITLE_H, title, size=title_size,
+        color=PD, bold=True)
     if lead:
         _tb(slide, LEAD_X, LEAD_Y, LEAD_W, LEAD_H, lead, size=lead_size,
             color=INK, bold=True)
@@ -480,6 +456,7 @@ def column_cards(slide, cards, *, cols=None, title="", lead=None, prs=None,
     ramps = ramps or [GRAD_PRIMARY, GRAD_STAGE2, GRAD_STAGE3]
     if gap is None:
         gap = _COL_GAP.get(n, 0.15)
+    n = max(1, n)
     w = (13.333 - 2 * M - gap * (n - 1)) / n
     if bottom:
         bh = bottom.get("h", 1.11)
@@ -581,6 +558,7 @@ def stage_cards(slide, stages, tasks=None, *, task_title=None, title="",
     top = hdr_top if top is None else top
     n = len(stages)
     gap = _COL_GAP.get(n, 0.15)
+    n = max(1, n)
     w = (13.333 - 2 * M - gap * (n - 1)) / n
     for i, st in enumerate(stages):
         x = M + i * (w + gap)
@@ -622,6 +600,7 @@ def four_role_cards(slide, cards, note=None, *, title="", lead=None, prs=None):
     top = content_header(slide, title, lead, prs=prs)
     n = len(cards)
     gap = 0.13
+    n = max(1, n)
     w = (13.333 - 2 * M - gap * (n - 1)) / n
     card_bottom = NOTE_Y - 0.25
     card_h = card_bottom - top
@@ -818,6 +797,7 @@ def stage_timeline(slide, stages, current=None, note=None, *, title="", lead=Non
     sy = top + 0.80
     n = len(stages)
     gap = _COL_GAP.get(n, 0.15)
+    n = max(1, n)
     cw = (13.333 - 2 * M - gap * (n - 1)) / n
     ramps = [GRAD_PRIMARY, GRAD_STAGE2, GRAD_STAGE3]
     for i, st in enumerate(stages):
@@ -855,3 +835,5 @@ __all__ = ["content_header", "chapter_page", "toc_page", "four_role_cards",
            "QUAD_PITCH_Y", "TOC_DECO", "TOC_TITLE", "TOC_TITLE_EN",
            "TOC_ACCENT", "TOC_NOTE", "TOC_ITEM_X", "TOC_ITEM_Y0",
            "TOC_ITEM_PITCH"]
+
+

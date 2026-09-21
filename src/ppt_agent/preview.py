@@ -13,6 +13,7 @@ shadows, 3-D) are approximated.
 from __future__ import annotations
 
 import io
+import math
 from pathlib import Path
 from typing import Any
 
@@ -163,6 +164,127 @@ def _is_oval(shape: Any) -> bool:
         return False
 
 
+
+def _gradient_of(shape):
+    """Return (stops, angle_deg) for a gradient-filled shape, else (None, None).
+
+    ``stops`` is a list of (position_0to1, (r, g, b)) sorted by position.
+    """
+    try:
+        fill = shape.fill
+        ftype = str(fill.type).upper()
+        if "GRADIENT" not in ftype:
+            return None, None
+        stops = []
+        for stop in fill.gradient_stops:
+            pos = float(stop.position)
+            rgb = _rgb_of(stop.color)
+            if rgb is not None:
+                stops.append((pos, rgb))
+        if len(stops) < 2:
+            return None, None
+        stops.sort(key=lambda s: s[0])
+        try:
+            angle = float(fill.gradient_angle)
+        except Exception:
+            angle = 0.0
+        return stops, angle
+    except Exception:
+        return None, None
+
+
+def _lerp(a, b, f):
+    return int(round(a + (b - a) * f))
+
+
+def _color_at(stops, t):
+    if t <= stops[0][0]:
+        return stops[0][1]
+    if t >= stops[-1][0]:
+        return stops[-1][1]
+    for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
+        if p0 <= t <= p1:
+            span = (p1 - p0) or 1.0
+            f = (t - p0) / span
+            return (_lerp(c0[0], c1[0], f), _lerp(c0[1], c1[1], f), _lerp(c0[2], c1[2], f))
+    return stops[-1][1]
+
+
+def _render_gradient(w, h, stops, angle_deg):
+    """Build a small RGBA gradient image (linear) of size w x h."""
+    w = max(1, int(round(w)))
+    h = max(1, int(round(h)))
+    rad = math.radians(angle_deg % 360)
+    dx, dy = math.cos(rad), -math.sin(rad)  # OOXML: 0 deg -> right, 90 -> up
+    grad = Image.new("RGB", (w, h))
+    px = grad.load()
+    # project each pixel centre on the gradient axis, normalise 0..1
+    cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
+    extent = (abs(dx) * (w - 1) + abs(dy) * (h - 1)) / 2.0
+    extent = extent or 1.0
+    for yy in range(h):
+        for xx in range(w):
+            t = 0.5 + (((xx - cx) * dx + (yy - cy) * dy) / (2 * extent))
+            t = 0.0 if t < 0 else (1.0 if t > 1 else t)
+            px[xx, yy] = _color_at(stops, t)
+    return grad
+
+
+def _shape_mask(w, h, kind, radius=0.055):
+    """Return an L-mode mask for the shape geometry."""
+    w = max(1, int(round(w)))
+    h = max(1, int(round(h)))
+    mask = Image.new("L", (w, h), 0)
+    md = ImageDraw.Draw(mask)
+    box = [0, 0, w - 1, h - 1]
+    if kind == "oval":
+        md.ellipse(box, fill=255)
+    elif kind == "round":
+        r = max(2, int(min(w, h) * radius))
+        md.rounded_rectangle(box, radius=r, fill=255)
+    else:
+        md.rectangle(box, fill=255)
+    return mask
+
+
+def _paint_gradient(canvas, shape, scale, kind):
+    left = float(shape.left) * scale
+    top = float(shape.top) * scale
+    w = max(float(shape.width) * scale, 1.0)
+    h = max(float(shape.height) * scale, 1.0)
+    stops, angle = _gradient_of(shape)
+    if stops is None:
+        return False
+    grad = _render_gradient(w, h, stops, angle)
+    mask = _shape_mask(w, h, kind)
+    ox, oy = int(round(left)), int(round(top))
+    region = canvas.crop((ox, oy, ox + grad.width, oy + grad.height)) if (
+        ox >= 0 and oy >= 0 and ox + grad.width <= canvas.width and oy + grad.height <= canvas.height
+    ) else None
+    grad = grad.convert("RGBA")
+    grad.putalpha(mask)
+    if region is not None:
+        canvas.paste(grad, (ox, oy), grad)
+    else:
+        canvas.paste(grad, (ox, oy), grad)
+    return True
+
+
+
+def _geom_kind(shape):
+    from pptx.oxml.ns import qn
+    try:
+        geom = shape._element.spPr.find(qn("a:prstGeom"))
+        prst = str(geom.get("prst", "")).lower() if geom is not None else ""
+    except Exception:
+        prst = ""
+    if prst in ("ellipse", "oval", "circle"):
+        return "oval"
+    if "round" in prst:
+        return "round"
+    return "rect"
+
+
 def _slide_background(slide: Any) -> tuple[int, int, int] | None:
     try:
         from pptx.oxml.ns import qn
@@ -186,10 +308,15 @@ def _paint_text(draw: Any, shape: Any, scale: float, dpi: float) -> None:
     left = float(shape.left) * scale
     top = float(shape.top) * scale
     width = max(float(shape.width) * scale, 8.0)
+    box_h = float(shape.height) * scale
     frame = shape.text_frame
     wrap = frame.word_wrap is not False
-    cursor = top
 
+    # Pre-measure content height so the vertical anchor (top/middle/bottom) can
+    # be honoured -- otherwise a card whose text is centred in PowerPoint would
+    # render flush to the top in the preview and mislead the critic loop.
+    layout: list[tuple[float, list[str], Any, tuple]] = []
+    total_h = 0.0
     for paragraph in frame.paragraphs:
         runs = list(paragraph.runs)
         text = "".join(run.text for run in runs)
@@ -208,13 +335,44 @@ def _paint_text(draw: Any, shape: Any, scale: float, dpi: float) -> None:
         size_px = size_pt * dpi / 72.0
         font = _font(size_px, bold)
         line_h = size_px * _LINE_SPACING
+        lines = _wrap(text, font, width) if wrap else text.split("\n")
+        alignment = str(paragraph.alignment or "").upper()
+        layout.append((line_h, lines, font, (rgb, width, alignment)))
+        total_h += line_h * max(1, len(lines))
+    try:
+        anchor = str(frame.vertical_anchor or "").upper()
+    except Exception:
+        anchor = ""
+    if "MIDDLE" in anchor:
+        cursor = top + max(0.0, (box_h - total_h) / 2)
+    elif anchor in ("BOTTOM", "LOWER"):
+        cursor = top + max(0.0, box_h - total_h)
+    else:
+        cursor = top
 
-        if not text:
+    for line_h, lines, font, (rgb, width, alignment) in layout:
+        runs = list(paragraph.runs)
+        text = "".join(run.text for run in runs)
+        base = runs[0] if runs else None
+        size_pt = 18.0
+        bold = False
+        rgb = (0, 0, 0)
+        if base is not None:
+            try:
+                if base.font.size is not None:
+                    size_pt = float(base.font.size.pt)
+            except Exception:
+                pass
+            bold = bool(base.font.bold)
+            rgb = _rgb_of(base.font.color) or (0, 0, 0)
+        size_px = size_pt * dpi / 72.0
+        font = _font(size_px, bold)
+        line_h = size_px * _LINE_SPACING
+
+        if not [ln for ln in lines if ln]:
             cursor += line_h
             continue
 
-        lines = _wrap(text, font, width) if wrap else text.split("\n")
-        alignment = str(paragraph.alignment or "").upper()
         for line in lines:
             try:
                 line_w = font.getlength(line)
@@ -230,26 +388,32 @@ def _paint_text(draw: Any, shape: Any, scale: float, dpi: float) -> None:
             cursor += line_h
 
 
-def _paint_shape(draw: Any, shape: Any, scale: float, dpi: float) -> None:
+def _paint_shape(draw: Any, canvas: Any, shape: Any, scale: float, dpi: float) -> None:
     left = float(shape.left) * scale
     top = float(shape.top) * scale
     width = float(shape.width) * scale
     height = float(shape.height) * scale
     box = [left, top, left + width, top + height]
-    oval = _is_oval(shape)
+    kind = _geom_kind(shape)
 
-    fill_rgb, alpha = _fill_of(shape)
-    if fill_rgb is not None and alpha > 0.01:
-        color = (*fill_rgb, int(round(alpha * 255)))
-        if oval:
-            draw.ellipse(box, fill=color)
-        else:
-            draw.rectangle(box, fill=color)
+    drawn = _paint_gradient(canvas, shape, scale, kind)
+    if not drawn:
+        fill_rgb, alpha = _fill_of(shape)
+        if fill_rgb is not None and alpha > 0.01:
+            color = (*fill_rgb, int(round(alpha * 255)))
+            if kind == "oval":
+                draw.ellipse(box, fill=color)
+            elif kind == "round":
+                draw.rounded_rectangle(box, radius=max(2, int(min(width, height) * 0.055)), fill=color)
+            else:
+                draw.rectangle(box, fill=color)
 
     line_rgb, line_w = _line_of(shape, dpi)
     if line_rgb is not None and line_w > 0:
-        if oval:
+        if kind == "oval":
             draw.ellipse(box, outline=line_rgb, width=int(round(line_w)))
+        elif kind == "round":
+            draw.rounded_rectangle(box, radius=max(2, int(min(width, height) * 0.055)), outline=line_rgb, width=int(round(line_w)))
         else:
             draw.rectangle(box, outline=line_rgb, width=int(round(line_w)))
 
@@ -305,7 +469,7 @@ def rasterize_pptx(
                     _paint_picture(canvas, shape, scale)
                     continue
                 if shape.has_text_frame or "AUTO_SHAPE" in str(getattr(shape, "shape_type", "")):
-                    _paint_shape(draw, shape, scale, dpi)
+                    _paint_shape(draw, canvas, shape, scale, dpi)
                 if shape.has_text_frame and shape.text_frame.text.strip():
                     _paint_text(draw, shape, scale, dpi)
             except Exception:
