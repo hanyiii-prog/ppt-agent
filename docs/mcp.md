@@ -153,6 +153,42 @@ model integrations should add a direct provider adapter rather than deepen relia
 The visual critic consumes the provider chat interface, so its review logic can stay independent of
 that transport. See the [MCP deprecation proposal](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/seps/2577-deprecate-roots-sampling-and-logging.md).
 
+### Direct Responses-compatible provider
+
+The MCP server can also use a directly configured OpenAI Responses-compatible endpoint. Set
+`PPT_AGENT_API_BASE_URL`, `PPT_AGENT_API_KEY`, and `PPT_AGENT_MODEL` in the server process
+environment. `PPT_AGENT_VISION_MODEL` is optional; only set it to a model that accepts image
+inputs. `PPT_AGENT_REASONING_EFFORT` optionally accepts `minimal`, `low`, `medium`, `high`, or
+`xhigh`. A complete direct configuration takes precedence over MCP sampling. A partial or
+invalid direct configuration is disclosed in the pipeline report, after which declared MCP
+sampling remains available as a fallback. Credentials are never copied into reports.
+
+Example host configuration (inject the secret through the host's environment manager rather than
+placing it in this JSON):
+
+```json
+{
+  "mcpServers": {
+    "ppt-agent": {
+      "command": "ppt-agent-mcp",
+      "args": ["--workspace", "/path/to/sandbox"],
+      "env": {
+        "PPT_AGENT_API_BASE_URL": "https://api.example/v1",
+        "PPT_AGENT_MODEL": "your-text-model",
+        "PPT_AGENT_VISION_MODEL": "your-vision-model"
+      }
+    }
+  }
+}
+```
+
+`ppt_agent_generate` accepts `template`, `reference_html`, and `reference_pdf` paths in the
+workspace. HTML contributes bounded visible text and diagram labels. Image-based PDFs are rendered
+to at most 32 numbered page images and sent only to a provider that explicitly declares vision
+support. OCR text is passed as page-located supplementary content, while images guide visual
+structure and diagrams. If no
+vision model is configured, the report says that the PDF was not visually read.
+
 ## Testing the server by hand
 
 ```bash

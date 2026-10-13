@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ppt-agent"
-version = "2.2.0"
+version = "3.0.0"
 description = "Portable agent-native presentation engineering framework"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,6 +21,7 @@ classifiers = [
 pptx = ["python-pptx>=0.6.21"]
 docx = ["python-docx>=1.0"]
 qa = ["Pillow>=10.0", "numpy>=1.26"]
+pdf = ["PyMuPDF>=1.24"]
 test = ["pytest>=8.0"]
 mcp = []
 

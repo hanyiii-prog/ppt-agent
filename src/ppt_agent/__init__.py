@@ -25,13 +25,14 @@ from .fidelity_gate import assert_deck_fidelity, compare_decks
 from .fidelity_pipeline import assert_deck_fidelity_pipeline, validate_deck_fidelity
 from .fidelity_repair import RepairDirective, plan_from_report, plan_repairs, repair_plan_dict
 
-__version__ = "2.2.0"
+__version__ = "3.0.0"
 
 __all__ = [
     "ADAPTER_PROTOCOL_VERSION",
     "CORE_API_VERSION",
     "CapabilitySet",
     "CloneShell",
+    "build_v3_deck",
     "dominant_colors",
     "ContractError",
     "FidelityIssue",
@@ -62,6 +63,10 @@ def __getattr__(name: str) -> Any:
         from .sdk import PptAgent
 
         return PptAgent
+    if name == "build_v3_deck":
+        from .rebuild_pipeline import build_v3_deck
+
+        return build_v3_deck
     if name == "dominant_colors":
         from .palette import dominant_colors
 

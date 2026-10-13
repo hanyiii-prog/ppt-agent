@@ -186,9 +186,48 @@ def test_generate_selects_visual_reviewer_only_when_host_declares_vision(
     assert isinstance(captured["visual_critic"], ModelVisualCritic)
     assert captured["visual_review_reason"] is None
 
+    reference_pdf = tmp_path / "reference.pdf"
+    reference_pdf.write_bytes(b"pdf placeholder")
+    captured.clear()
+    tool_generate({
+        "markdown": "# Report",
+        "reference_pdf": str(reference_pdf),
+    }, context)
+    assert captured["reference_pdf_path"] == reference_pdf
+
     session.vision_supported = False
     captured.clear()
     tool_generate({"markdown": "# Report"}, context)
 
     assert captured["visual_critic"] is None
     assert "不支持图像输入" in captured["visual_review_reason"]
+
+
+def test_generate_prefers_direct_responses_provider_and_warns_for_text_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_pipeline(markdown: str, **kwargs):
+        captured.update(kwargs)
+        return {"metadata": {}}
+
+    monkeypatch.setattr("ppt_agent.agent.pipeline.run_pipeline", fake_pipeline)
+    monkeypatch.setenv("PPT_AGENT_API_BASE_URL", "https://api.example/v1/responses")
+    monkeypatch.setenv("PPT_AGENT_API_KEY", "fresh-secret")
+    monkeypatch.setenv("PPT_AGENT_MODEL", "text-model")
+    monkeypatch.setenv("PPT_AGENT_VISION_MODEL", "vision-model")
+    context = ToolContext(agent=object(), workspace=tmp_path, session=FakeSession("host"))
+
+    tool_generate({"markdown": "# Report"}, context)
+
+    assert isinstance(captured["visual_critic"], ModelVisualCritic)
+    assert captured["visual_critic"].provider.name == "openai-responses"
+    assert captured["visual_critic"].provider.supports_vision
+
+    monkeypatch.delenv("PPT_AGENT_VISION_MODEL")
+    captured.clear()
+    tool_generate({"markdown": "# Report"}, context)
+    assert captured["visual_critic"] is None
+    assert "未配置视觉模型" in captured["visual_review_reason"]

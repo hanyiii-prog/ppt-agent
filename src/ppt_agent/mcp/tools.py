@@ -375,25 +375,26 @@ def tool_fidelity_validate(arguments: dict[str, Any], context: ToolContext) -> d
 
 
 def tool_narrative_plan(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-    from ..llm.provider import llm_fn_from_provider, select_provider
+    from ..llm.provider import llm_fn_from_provider, resolve_provider
     from ..narrative_engine import build_narrative
     from ..parsers import parse_markdown
 
     text = _read_text(arguments, context, source_key="source", inline_key="markdown")
     document = parse_markdown(text)
-    provider = select_provider(context.session)
+    provider, provider_warning = resolve_provider(context.session)
     if provider is None:
-        # red line 6: no sampling capability -> the LLM was never attempted
         narrative = build_narrative(document)
     else:
         narrative = build_narrative(document, llm_fn=llm_fn_from_provider(provider))
     narrative["source"] = "mcp"
+    if provider_warning:
+        narrative["provider_warning"] = provider_warning
     return narrative
 
 
 def tool_generate(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
     from ..agent.pipeline import run_pipeline
-    from ..llm.provider import llm_fn_from_provider, select_provider
+    from ..llm.provider import llm_fn_from_provider, resolve_provider
     from ..visual_critic import ModelVisualCritic
 
     text = _read_text(arguments, context, source_key="source", inline_key="markdown")
@@ -404,28 +405,40 @@ def tool_generate(arguments: dict[str, Any], context: ToolContext) -> dict[str, 
     task_spec = arguments.get("task_spec")
     if task_spec is not None and not isinstance(task_spec, dict):
         raise ToolError("'task_spec' must be an object")
-    provider = select_provider(context.session)
+    task_spec = dict(task_spec or {})
+    user_request = _optional_string(arguments, "user_request")
+    if user_request:
+        task_spec["user_request"] = user_request
+    provider, provider_warning = resolve_provider(context.session)
     llm_fn = llm_fn_from_provider(provider) if provider is not None else None
     visual_critic = None
-    if provider is not None and provider.supports_vision:
+    if provider is not None and getattr(provider, "supports_vision", False):
         visual_critic = ModelVisualCritic(provider)
         visual_review_reason = None
     elif provider is None:
         visual_review_reason = (
-            "当前宿主未提供模型采样能力；将只运行 Agent 可用的确定性检查，"
+            f"{provider_warning} " if provider_warning else ""
+        ) + (
+            "当前没有可用模型；将只运行 Agent 可用的确定性检查，"
             "无法完整判断页面审美与视觉表达。"
         )
-    elif getattr(context.session, "vision_supported", None) is False:
-        visual_review_reason = (
-            "当前模型声明不支持图像输入；将退回确定性检查，"
-            "无法完整判断页面审美与视觉表达。"
-        )
+    elif getattr(provider, "name", "") == "mcp-sampling":
+        if getattr(context.session, "vision_supported", None) is False:
+            visual_review_reason = (
+                "当前模型声明不支持图像输入；将退回确定性检查，"
+                "无法完整判断页面审美与视觉表达。"
+            )
+        else:
+            visual_review_reason = (
+                "宿主未声明当前模型具备视觉能力；Agent 不会发送页面截图，"
+                "将退回确定性检查，无法完整判断页面审美与视觉表达。"
+            )
     else:
         visual_review_reason = (
-            "当前宿主未声明模型视觉能力，Agent 未向模型发送页面截图；"
+            "当前接入仅配置了文本模型，未配置视觉模型；Agent 未向模型发送页面截图；"
             "将退回确定性检查，无法完整判断页面审美与视觉表达。"
         )
-    return run_pipeline(
+    result = run_pipeline(
         text,
         out_dir=context.output_path(out_dir),
         density=density,
@@ -433,7 +446,22 @@ def tool_generate(arguments: dict[str, Any], context: ToolContext) -> dict[str, 
         task_spec=task_spec,
         visual_critic=visual_critic,
         visual_review_reason=visual_review_reason,
+        template_path=(
+            context.input_path(_string(arguments, "template"))
+            if _optional_string(arguments, "template") else None
+        ),
+        reference_html_path=(
+            context.input_path(_string(arguments, "reference_html"))
+            if _optional_string(arguments, "reference_html") else None
+        ),
+        reference_pdf_path=(
+            context.input_path(_string(arguments, "reference_pdf"))
+            if _optional_string(arguments, "reference_pdf") else None
+        ),
     )
+    if provider_warning:
+        result.setdefault("metadata", {})["provider_warning"] = provider_warning
+    return result
 
 
 TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str, Any]]] = {
@@ -775,10 +803,10 @@ TOOL_SPECS: list[dict[str, Any]] = [
     {
         "name": "ppt_agent_generate",
         "description": (
-            "V2.1 end-to-end pipeline: Markdown -> analyzed -> planned -> archetypes -> "
-            "solver layout -> rendered PPTX + HTML -> delivery gate -> repair cycle. "
+            "End-to-end: Markdown -> analyzed -> model-authored storyboard -> template-aware "
+            "PPTX + HTML -> per-page delivery gate -> bounded source-preserving repair. "
             "The report states every stage's decision, the gate obligations and the "
-            "honest llm disclosure (sampled|fallback|off)."
+            "honest model/vision fallback state."
         ),
         "inputSchema": _schema(
             {
@@ -786,6 +814,10 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "source": {"type": "string", "description": "Path to a Markdown file"},
                 "out_dir": {"type": "string", "description": "Output directory inside the workspace (default 'pipeline')"},
                 "density": {"type": "string", "enum": ["compact", "standard", "air"]},
+                "template": {"type": "string", "description": "Optional PPTX template path inside the workspace"},
+                "reference_html": {"type": "string", "description": "Optional HTML reference with architecture diagrams and design context"},
+                "reference_pdf": {"type": "string", "description": "Optional PDF content and visual reference; OCR text works without a declared vision model"},
+                "user_request": {"type": "string", "description": "Original user brief, preserved as a planning constraint"},
                 "task_spec": {
                     "type": "object",
                     "description": "Audience, objective, page budget and visual constraints for model-authored storyboarding",

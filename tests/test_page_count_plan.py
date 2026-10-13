@@ -91,3 +91,18 @@ def test_plan_reconciles_with_estimate(document) -> None:
     assert abs(plan["page_total"] - estimate["total"]) <= 3, (
         "plan and estimate must stay within reconciliation tolerance"
     )
+
+
+def test_content_pages_keep_the_active_subsection_context() -> None:
+    document = parse_markdown(
+        "# Deck\n\n## 建设计划\n\n### (一)总体技术架构\n\n"
+        "说明文字。\n\n| 层级 | 定位 |\n|---|---|\n| 第一层 | 底座 |\n",
+        source="sample.md",
+    )
+    plan = build_presentation_plan(document)
+    content = [page for page in plan["pages"] if page["kind"] == "content"]
+    assert len(content) == 2
+    assert [page["subsection"] for page in content] == [
+        "(一)总体技术架构",
+        "(一)总体技术架构",
+    ]

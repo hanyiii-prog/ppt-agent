@@ -597,6 +597,49 @@ def column_cards(slide, cards, *, cols=None, title="", lead=None, prs=None,
     return top
 
 
+# --- kit: layered architecture ------------------------------------------------
+def architecture_layers(slide, layers, side=None, *, title="", lead=None, prs=None):
+    """Render an editable layered architecture with an optional side legend.
+
+    Architecture tables need a vertical hierarchy, not a row of tiny cards.
+    The kit accepts normalized ``layers`` records so it can be reused for
+    infrastructure, data, service, and application stacks.
+    """
+    top = content_header(slide, title, lead, prs=prs)
+    layers = [item for item in (layers or []) if item.get("head") or item.get("desc")]
+    if not layers:
+        return top
+    side = side or []
+    side_x = 10.12 if side else 0.0
+    main_w = 9.18 if side else 12.22
+    gap = 0.16
+    layer_h = min(0.72, max(0.48, (BOT - top - 0.18) / len(layers) - gap))
+    ramps = [GRAD_PRIMARY, GRAD_STAGE2, GRAD_STAGE3, ("9CCBFB", "DDEEFF")]
+    for index, item in enumerate(layers):
+        y = top + index * (layer_h + gap)
+        grad = ramps[index % len(ramps)]
+        _round(slide, M, y, main_w, layer_h, grad=grad, radius=0.06)
+        level = str(item.get("level") or item.get("head") or "")
+        head = str(item.get("head") or "")
+        desc = str(item.get("desc") or "")
+        _tb(slide, M + 0.20, y + 0.08, 0.72, layer_h - 0.16,
+            level, size=10, color=WHITE, bold=True,
+            anchor=MSO_ANCHOR.MIDDLE, align=PP_ALIGN.CENTER)
+        _tb(slide, M + 1.04, y + 0.08, main_w - 1.26, layer_h - 0.16,
+            [(head, 11.5, WHITE, True), (desc, 9.5, WHITE, False)],
+            anchor=MSO_ANCHOR.MIDDLE, spacing=1.1)
+    if side:
+        _round(slide, side_x, top, 2.10, BOT - top, fill=PS, line=DIV, radius=0.06)
+        _tb(slide, side_x + 0.18, top + 0.18, 1.74, 0.36,
+            "设计原则", size=13, color=PD, bold=True)
+        rows = []
+        for item in side[:5]:
+            rows.append(("● " + str(item), 9.5, TXT, False))
+        _tb(slide, side_x + 0.18, top + 0.70, 1.74, BOT - top - 0.88,
+            rows, spacing=1.3)
+    return top
+
+
 # --- kit: homePlate stage cards + task list (推进安排) ----------------------
 STAGE_RAMPS = (("0C67BC", "1687F1"), ("2B8FF0", "5EB0F8"), ("70B6FE", "9CCBFB"))
 
@@ -914,7 +957,8 @@ def stage_timeline(slide, stages, current=None, note=None, *, title="", lead=Non
 
 __all__ = ["content_header", "chapter_page", "toc_page", "four_role_cards",
            "org_chart",
-           "two_panel_list", "quad_cards", "column_cards", "stage_cards",
+           "two_panel_list", "quad_cards", "column_cards", "architecture_layers",
+           "stage_cards",
            "STAGE_RAMPS",
            "progress_timeline", "stage_timeline", "STATUS", "GRAD_PRIMARY",
            "GRAD_WARN", "GRAD_PLAN", "GRAD_STAGE2", "GRAD_STAGE3", "FONT",

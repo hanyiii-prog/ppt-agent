@@ -79,6 +79,75 @@ def _component_matches_for_report(document) -> dict:
         return {"schema": "component-match/v1", "components": [], "matches": [], "unmatched": []}
 
 
+def _blocking_repair_requests(gate_report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reduce gate output to page-scoped blocking findings for the planner."""
+    requests: list[dict[str, Any]] = []
+    page_gate = gate_report.get("page_gate") or {}
+    for page in page_gate.get("pages") or []:
+        if not isinstance(page, dict) or page.get("passed") is not False:
+            continue
+        page_no = page.get("page")
+        if isinstance(page_no, int) and not isinstance(page_no, bool):
+            requests.append({
+                "page": page_no,
+                "kind": "page_gate",
+                "issues": list(page.get("issues") or []),
+            })
+
+    critic_gate = gate_report.get("critic_gate") or {}
+    for finding in critic_gate.get("findings") or []:
+        if not isinstance(finding, dict) or finding.get("severity") != "error":
+            continue
+        requests.append({
+            "page": finding.get("page"),
+            "kind": "visual_critic",
+            "severity": finding.get("severity"),
+            "rule": finding.get("rule"),
+            "message": finding.get("message"),
+        })
+
+    visual_gate = gate_report.get("visual_gate") or {}
+    for page in visual_gate.get("pages") or []:
+        if not isinstance(page, dict) or page.get("passed") is not False:
+            continue
+        page_no = page.get("page")
+        if isinstance(page_no, int) and not isinstance(page_no, bool):
+            requests.append({
+                "page": page_no,
+                "kind": "visual_regression",
+                "metrics": {
+                    "ssim": page.get("ssim"),
+                    "mae": page.get("mae"),
+                    "mismatch_ratio": page.get("mismatch_ratio"),
+                },
+            })
+    return requests
+
+
+def _sync_storyboard_layout(
+    storyboard: dict[str, Any] | None,
+    plan: dict[str, Any],
+) -> None:
+    """Keep the report's normalized storyboard aligned with repaired page plans."""
+    if not isinstance(storyboard, dict):
+        return
+    slides = storyboard.get("slides")
+    if not isinstance(slides, list):
+        return
+    for page in plan.get("pages") or []:
+        page_no = page.get("page_no")
+        if not isinstance(page_no, int) or not 1 <= page_no <= len(slides):
+            continue
+        slide = slides[page_no - 1]
+        if not isinstance(slide, dict):
+            continue
+        archetype = page.get("archetype")
+        if isinstance(archetype, dict):
+            slide["archetype_name"] = archetype.get("archetype") or ""
+        slide["layout_variant"] = page.get("layout_variant") or "standard"
+        slide["visual_form"] = page.get("visual_form") or ""
+
+
 # ---- intelligent condensation ---------------------------------------------
 
 def condense_plan(
@@ -145,25 +214,94 @@ def condense_plan(
         quota[title] = take
         remaining -= take
 
-    keep_ids: set[int] = set()
     dropped_pages = 0
+    merged_pages = 0
+    merged_blocks = 0
+    new_pages: list[dict[str, Any]] = []
+
+    # Repack each chapter in source order. This preserves narrative flow and
+    # prevents a value-ranked landing page from becoming a catch-all overflow
+    # page after condensation.
+    for page in pages:
+        if page.get("kind") != "content":
+            new_pages.append(_copy.deepcopy(page))
+
     for title, pool in by_section.items():
         allowance = quota.get(title, 0)
-        ranked = sorted(pool, key=content_value, reverse=True)
-        keep = ranked[:allowance]
-        dropped_pages += len(pool) - len(keep)
-        keep_ids.update(id(p) for p in keep)
+        ordered_pool = sorted(pool, key=lambda page: page.get("page_no") or 0)
+        if not ordered_pool:
+            continue
+        allowance = max(1, min(allowance, len(ordered_pool)))
+        source_groups: list[tuple[dict[str, Any], list[str], float]] = []
+        for page in ordered_pool:
+            block_ids = list(page.get("source_blocks") or [])
+            volume = sum(
+                block_lookup[block_id].char_volume()
+                for block_id in block_ids
+                if block_id in block_lookup
+            )
+            source_groups.append((page, block_ids, max(1.0, float(volume))))
+        target = sum(group[2] for group in source_groups) / allowance
+        buckets: list[dict[str, Any]] = []
+        for original, block_ids, volume in source_groups:
+            if not buckets or (
+                len(buckets) < allowance
+                and buckets[-1]["volume"] + volume > target
+                and len(buckets[-1]["source_blocks"]) > 0
+            ):
+                buckets.append({
+                    "page": _copy.deepcopy(original),
+                    "source_blocks": [],
+                    "volume": 0.0,
+                    "merged_from": [],
+                })
+            bucket = buckets[-1]
+            bucket["source_blocks"].extend(
+                block_id for block_id in block_ids
+                if block_id not in bucket["source_blocks"]
+            )
+            bucket["volume"] += volume
+            bucket["merged_from"].append(original.get("page_no"))
+        # Rounding or unusually large tables can leave more buckets than the
+        # quota. Merge the smallest adjacent bucket into its predecessor while
+        # preserving all source blocks.
+        while len(buckets) > allowance:
+            index = min(
+                range(1, len(buckets)),
+                key=lambda i: buckets[i]["volume"],
+            )
+            buckets[index - 1]["source_blocks"].extend(
+                block_id for block_id in buckets[index]["source_blocks"]
+                if block_id not in buckets[index - 1]["source_blocks"]
+            )
+            buckets[index - 1]["volume"] += buckets[index]["volume"]
+            buckets[index - 1]["merged_from"].extend(buckets[index]["merged_from"])
+            buckets.pop(index)
+        for bucket in buckets:
+            page = bucket["page"]
+            page["source_blocks"] = bucket["source_blocks"]
+            page.pop("archetype", None)
+            if len(bucket["merged_from"]) > 1:
+                merged_pages += len(bucket["merged_from"]) - 1
+                merged_blocks += sum(
+                    len(group[1]) for group in source_groups
+                    if group[0].get("page_no") in bucket["merged_from"][1:]
+                )
+            new_pages.append(page)
+        dropped_pages += max(0, len(ordered_pool) - len(buckets))
 
-    new_pages = [p for p in pages if p.get("kind") != "content" or id(p) in keep_ids]
-    new_pages.sort(key=lambda p: p.get("page_no") or 0)
+    new_pages.sort(key=lambda page: page.get("page_no") or 0)
+    for index, page in enumerate(new_pages, start=1):
+        page["page_no"] = index
     condensed["pages"] = new_pages
     condensed["page_total"] = len(new_pages)
 
     return condensed, {
         "original": original_total, "final": len(new_pages), "max_total": max_total,
-        "sections_merged": 0, "pages_dropped": dropped_pages,
+        "sections_merged": len(by_section), "pages_dropped": dropped_pages,
+        "pages_merged": merged_pages, "source_blocks_merged": merged_blocks,
         "spine_sections": len(sections),
-        "strategy": "kept every chapter spine; trimmed lowest-value content pages",
+        "strategy": "kept every chapter spine; merged trimmed pages into retained landing pages",
     }
 
 
@@ -325,6 +463,13 @@ def _blocks_to_column_cards(blocks: list, *, page_title: str = "") -> list[dict[
         for item in texts:
             if pt and item.strip() == pt:
                 continue
+            if grp["body"] and not grp["title"]:
+                cards.append({
+                    "title": "要点",
+                    "lines": [grp["body"]],
+                    "grad": True,
+                })
+                break
             title, body = _split_card_text(item)
             cards.append({"title": title, "lines": [body] if body else [], "grad": True})
     return cards
@@ -396,6 +541,16 @@ def _blocks_to_stages(blocks: list, *, page_title: str = "") -> list[dict[str, s
     stages: list[dict[str, str]] = []
     pt = (page_title or "").strip()
     for block in blocks:
+        if block.type == "table":
+            for row in block.rows:
+                values = [cell.strip() for cell in row if cell and cell.strip()]
+                if not values:
+                    continue
+                stages.append({
+                    "head": values[0][:18],
+                    "desc": "；".join(values[1:])[:180],
+                })
+            continue
         if block.type in ("bullets", "ordered") and block.items:
             for item in block.items:
                 if pt and item.strip() == pt:
@@ -411,8 +566,9 @@ def _blocks_to_stages(blocks: list, *, page_title: str = "") -> list[dict[str, s
     return stages
 
 
-_DATE_RE = __import__("re").compile(
-    r"(20\d{2})[\s年./-]{0,2}(\d{1,2})?[\s月./-]{0,2}(\d{1,2})?[日号]?"
+_DATE_RE = re.compile(
+    r"(20\d{2})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*[日号])?"
+    r"|(?<!\d)(20\d{2})[./-](\d{1,2})(?:[./-](\d{1,2}))?"
 )
 
 
@@ -425,17 +581,33 @@ def _derive_cover_meta(document) -> str:
     for block in document.blocks[:20]:
         text = block.text or " ".join(block.items or [])
         m = _DATE_RE.search(text)
-        if m and m.group(1) and 1900 < int(m.group(1)) < 2100:
-            year = m.group(1)
-            month = m.group(2)
-            day = m.group(3)
+        if m:
+            year = m.group(1) or m.group(4)
+            month = m.group(2) or m.group(5)
+            day = m.group(3) or m.group(6)
+        else:
+            continue
+        if year and 1900 < int(year) < 2100:
             parts = [year + "年"]
             if month:
                 parts.append(month + "月")
             if day:
                 parts.append(day + "日")
-            return " ".join(parts)
+            return "".join(parts)
     return ""
+
+
+def _page_item_count(blocks: list[Any]) -> int:
+    """Count drawable items, including rows hidden inside a table block."""
+    total = 0
+    for block in blocks:
+        if block.type == "table":
+            total += max(1, len(block.rows))
+        elif block.type in ("bullets", "ordered"):
+            total += len(block.items)
+        else:
+            total += 1
+    return total
 
 
 def _coerce_design_plan(plan):
@@ -526,7 +698,11 @@ def _plan_to_clone_pages(
                 "meta": doc_title,
             })
         else:
-            kit = _archetype_to_kit(archetype, len(blocks), rotation=_content_rotation)
+            kit = _archetype_to_kit(
+                archetype,
+                _page_item_count(blocks),
+                rotation=_content_rotation,
+            )
             _content_rotation += 1
             page_title = page.get("title") or ""
             # filter out blocks whose text matches the page title (avoids
@@ -544,7 +720,9 @@ def _plan_to_clone_pages(
             # The lead renders in the page header (title + sub-heading). Drop
             # that same block from the card inputs so it is not painted a
             # second time inside a card (the "duplicated heading" defect).
-            if lead_source:
+            # Keep a lone paragraph in the body. It is the only evidence on
+            # many narrative pages and dropping it creates an empty shell.
+            if lead_source and len(lead_blocks) > 1:
                 blocks = [
                     b for b in blocks
                     if not (b.type in ("heading", "paragraph")
@@ -593,6 +771,8 @@ def run_pipeline(
     task_spec: dict[str, Any] | None = None,
     visual_critic: Any = None,
     visual_review_reason: str | None = None,
+    reference_html_path: str | Path | None = None,
+    reference_pdf_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Markdown -> delivered deck + the full decision report."""
     agent = agent or PptAgent()
@@ -624,12 +804,139 @@ def run_pipeline(
         fingerprint = check_template_consistency(design_dna, template_dna or {})
 
     document = parse_markdown(markdown, source="pipeline")
-    analyzed = analyze_content(document)
     task_spec = task_spec if isinstance(task_spec, dict) else {}
+    html_reference_report: dict[str, Any] = {
+        "used": False,
+        "title": None,
+        "heading_count": 0,
+        "text_chars": 0,
+        "truncated": False,
+        "warning": None,
+    }
+    if reference_html_path is not None:
+        try:
+            from ..html_reference import extract_html_reference
+
+            reference = extract_html_reference(reference_html_path)
+            task_spec = {
+                **task_spec,
+                "reference_html": {
+                    "purpose": "visual and diagram reference only; Markdown remains the fact source",
+                    "title": reference["title"],
+                    "headings": reference["headings"],
+                    "diagram_excerpt": reference["diagram_excerpt"],
+                    "text_excerpt": reference["text_excerpt"],
+                },
+            }
+            html_reference_report.update({
+                "used": True,
+                "title": reference["title"],
+                "heading_count": len(reference["headings"]),
+                "text_chars": len(reference["text_excerpt"]),
+                "truncated": reference["truncated"],
+                "filename": Path(reference_html_path).name,
+            })
+        except Exception as exc:  # noqa: BLE001 -- optional reference must not block delivery
+            html_reference_report["warning"] = (
+                f"HTML 参考文件未能读取（{type(exc).__name__}）。"
+            )
+    pdf_reference_report: dict[str, Any] = {
+        "provided": reference_pdf_path is not None,
+        "status": "not_provided" if reference_pdf_path is None else "not_processed",
+        "filename": Path(reference_pdf_path).name if reference_pdf_path else None,
+        "page_count": None,
+        "selected_pages": [],
+        "truncated": False,
+        "text_chars": 0,
+        "text_pages": [],
+        "methods": [],
+        "warning": None,
+    }
+    pdf_reference_images = ()
+    if reference_pdf_path is not None:
+        try:
+            from ..pdf_reference import extract_pdf_reference
+
+            extracted_reference = extract_pdf_reference(reference_pdf_path)
+            pdf_pages = extracted_reference["pages"]
+            task_spec = {
+                **task_spec,
+                "reference_pdf": {
+                    "purpose": (
+                        "supplementary content and visual evidence; use page-located "
+                        "text and images, reconcile conflicts against Markdown"
+                    ),
+                    "filename": Path(reference_pdf_path).name,
+                    "page_count": extracted_reference["page_count"],
+                    "selected_pages": extracted_reference["selected_pages"],
+                    "content_pages": pdf_pages,
+                    "text_chars": extracted_reference["text_chars"],
+                    "methods": extracted_reference["methods"],
+                    "truncated": extracted_reference["truncated"],
+                },
+            }
+            pdf_reference_report.update({
+                "status": "content_extracted",
+                "page_count": extracted_reference["page_count"],
+                "selected_pages": extracted_reference["selected_pages"],
+                "truncated": extracted_reference["truncated"],
+                "text_chars": extracted_reference["text_chars"],
+                "text_pages": [item["page"] for item in pdf_pages],
+                "methods": extracted_reference["methods"],
+            })
+        except Exception as exc:  # noqa: BLE001 -- optional reference must disclose
+            pdf_reference_report.update({
+                "status": "content_extract_failed",
+                "warning": f"PDF 内容未能提取（{type(exc).__name__}）。",
+            })
+        image_call = getattr(llm_fn, "with_images", None) if llm_fn is not None else None
+        if llm_fn is None:
+            if pdf_reference_report["status"] == "content_extracted":
+                pdf_reference_report.update({
+                    "status": "content_extracted_no_model",
+                    "warning": (
+                        "PDF 已提取为带页码的补充内容，但当前没有模型；"
+                        "未进行视觉理解，页面图像未发送。"
+                    ),
+                })
+        elif getattr(llm_fn, "supports_vision", False) is not True or not callable(image_call):
+            pdf_reference_report.update({
+                "status": "content_sent_no_vision_model",
+                "warning": (
+                    "PDF 带页码文字已随任务发送；当前模型未声明视觉能力，"
+                    "页面图像未发送。图示和排版信息可能无法完整理解。"
+                ),
+            })
+        else:
+            try:
+                from ..pdf_reference import render_pdf_reference
+
+                rendered_reference = render_pdf_reference(reference_pdf_path)
+                pdf_reference_images = rendered_reference["images"]
+                pdf_reference_report.update({
+                    "status": "content_and_images_sent_to_vision_model",
+                    "page_count": rendered_reference["page_count"],
+                    "selected_pages": rendered_reference["selected_pages"],
+                    "truncated": rendered_reference["truncated"],
+                    "warning": (
+                        "PDF 页数超出视觉参考上限；仅前 32 页已发送。"
+                        if rendered_reference["truncated"] else None
+                    ),
+                })
+            except Exception as exc:  # noqa: BLE001 -- optional reference must disclose, not block
+                pdf_reference_report.update({
+                    "status": "render_failed",
+                    "warning": (
+                        f"PDF 页面图像未能处理（{type(exc).__name__}）；"
+                        "已保留可用的文字补充内容。"
+                    ),
+                })
+    analyzed = analyze_content(document)
     storyboard_result = build_storyboard(
         analyzed,
         llm_fn=llm_fn,
         constraints=task_spec,
+        reference_images=pdf_reference_images,
     )
     storyboard = storyboard_result["storyboard"]
     if storyboard is not None:
@@ -800,6 +1107,120 @@ def run_pipeline(
     elif not has_gate_deck:
         visual_review["warning"] = "未生成可供检查的 PPTX，交付门禁和视觉审阅未运行。"
 
+    visual_repair_report: dict[str, Any] = {
+        "enabled": False,
+        "iterations": [],
+        "stop_reason": "not_run",
+    }
+    if not gate_deck:
+        visual_repair_report["stop_reason"] = "gate_disabled"
+    elif not has_gate_deck:
+        visual_repair_report["stop_reason"] = "no_pptx"
+    elif gate_report.get("passed") is True:
+        visual_repair_report["stop_reason"] = "initial_gate_passed"
+    elif llm_fn is None:
+        visual_repair_report["stop_reason"] = "no_model_for_repair"
+    elif design_plan is not None:
+        visual_repair_report["stop_reason"] = "external_design_plan_is_authoritative"
+    elif route == "clone" and fallback_reason:
+        visual_repair_report["stop_reason"] = "template_route_degraded"
+    else:
+        from ..storyboard import repair_storyboard_plan
+
+        visual_repair_report["enabled"] = True
+        visual_repair_report["stop_reason"] = "max_iterations"
+        for iteration in range(1, 3):
+            repair_requests = _blocking_repair_requests(gate_report)
+            if not repair_requests:
+                visual_repair_report["stop_reason"] = "no_page_level_findings"
+                break
+
+            repaired, repair_attempt = repair_storyboard_plan(
+                annotated, analyzed, repair_requests, llm_fn,
+                reference_images=pdf_reference_images,
+            )
+            attempt_report = {
+                "iteration": iteration,
+                "findings": repair_requests,
+                **repair_attempt,
+            }
+            visual_repair_report["iterations"].append(attempt_report)
+            if not repair_attempt.get("applied_pages"):
+                visual_repair_report["stop_reason"] = repair_attempt.get(
+                    "stop_reason"
+                ) or "no_changes"
+                break
+
+            annotated = repaired
+            plan = _copy.deepcopy(repaired)
+            _sync_storyboard_layout(storyboard, annotated)
+            try:
+                pptx_path = out / "deck.pptx"
+                if route == "clone":
+                    from ..clone_build import render_clone_deck
+
+                    clone_pages = _plan_to_clone_pages(annotated, document)
+                    clone_result = render_clone_deck(
+                        template_path, clone_pages, pptx_path,
+                        audit=False, fidelity=True,
+                    )
+                    artifacts["pptx"] = str(pptx_path)
+                    rendered_pages = int(clone_result.get("pages") or len(clone_pages))
+                    artifacts["clone_audit"] = {
+                        "warnings": clone_result.get("warnings", []),
+                        "fidelity": clone_result.get("fidelity", {}),
+                        "structural_qc": clone_result.get("structural_qc", []),
+                    }
+                else:
+                    from ..agent.plan_to_ir import plan_to_ir
+                    from ..repair import run_repair_cycle
+
+                    presentation, element_cache = plan_to_ir(
+                        annotated, analyzed, title=document.title,
+                        llm_fn=llm_fn, template_fingerprint=fingerprint,
+                        layout_engine=engine,
+                        storyboard_mode=storyboard is not None,
+                    )
+                    boxes = [
+                        {"x": component.x or 0, "y": component.y or 0,
+                         "w": component.w or 1, "h": component.h or 1,
+                         "absolute": True, "text": component.text or ""}
+                        for slide in presentation.slides
+                        for component in slide.components
+                    ]
+                    repair_report = run_repair_cycle(boxes, 13.333, 7.5)
+                    agent.render(presentation, pptx_path)
+                    html_path = out / "deck.html"
+                    agent.render(presentation, html_path, renderer="html")
+                    artifacts["pptx"] = str(pptx_path)
+                    artifacts["html"] = str(html_path)
+                    artifacts["element_cache"] = element_cache
+                gate_report = agent.gate(
+                    Path(artifacts["pptx"]),
+                    workspace=out / "qa",
+                    reference=reference_pptx,
+                    critic=visual_critic,
+                    visual_review_reason=visual_review_reason,
+                )
+                visual_review = gate_report.get("visual_review") or {
+                    "status": "deterministic_fallback",
+                    "mode": gate_report.get("mode", "unknown"),
+                    "warning": visual_review_reason,
+                }
+                attempt_report["gate_passed"] = gate_report.get("passed")
+            except Exception as exc:  # noqa: BLE001 -- keep the last report deliverable
+                attempt_report["rebuild_error"] = type(exc).__name__
+                visual_repair_report["stop_reason"] = "rebuild_or_gate_failed"
+                break
+            if gate_report.get("passed") is True:
+                visual_repair_report["stop_reason"] = "gate_passed"
+                break
+
+    repair_report = {
+        **(repair_report if isinstance(repair_report, dict) else {}),
+        "delivery_loop": visual_repair_report,
+    }
+
     if route == "clone" and artifacts.get("pptx"):
         try:
             from ..clone_build import audit_deck
@@ -829,6 +1250,8 @@ def run_pipeline(
                 "storyboard_error": storyboard_result.get("error"),
                 "task_spec": task_spec,
             },
+            "html_reference": html_reference_report,
+            "pdf_reference": pdf_reference_report,
             "condensation": condensation_report,
             "archetypes": {
                 page["page_no"]: (page.get("archetype") or {}).get("archetype")

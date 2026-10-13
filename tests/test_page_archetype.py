@@ -25,6 +25,41 @@ def test_table_page_wins_over_everything() -> None:
     assert decision["confidence"] >= 0.9
 
 
+def test_table_semantics_route_common_executive_table_shapes() -> None:
+    from ppt_agent.page_archetype import classify_table_semantics
+
+    assert classify_table_semantics(ContentBlock(
+        type="table",
+        id="architecture",
+        headers=["层级", "定位", "主要内容"],
+        rows=[["第一层", "底座", "HIS / EMR"]],
+    )) == "architecture"
+    assert classify_table_semantics(ContentBlock(
+        type="table",
+        id="timeline",
+        headers=["时间", "工作内容", "产出物 / 验收标准", "责任主体"],
+        rows=[["9 月中旬", "标签表", "标签表交付", "卫宁团队"]],
+    )) == "timeline"
+    assert classify_table_semantics(ContentBlock(
+        type="table",
+        id="raci",
+        headers=["关键任务", "卫宁团队", "朗视公司", "信息科", "临床科室"],
+        rows=[["数据抽取", "R", "I", "A", "I"]],
+    )) == "responsibility"
+
+
+def test_table_semantics_preserves_generic_tables_as_matrix() -> None:
+    from ppt_agent.page_archetype import classify_table_semantics
+
+    decision = classify_table_semantics(ContentBlock(
+        type="table",
+        id="generic",
+        headers=["字段", "说明"],
+        rows=[["标签", "来源可追溯"]],
+    ))
+    assert decision == "matrix"
+
+
 def test_timeline_from_ordered_date_items() -> None:
     blocks = [ContentBlock(type="ordered", id="o", items=[
         "9.11 完成数据治理", "9.30 完成接口联调", "10.15 完成全院培训",

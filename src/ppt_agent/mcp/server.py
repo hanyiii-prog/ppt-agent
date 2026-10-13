@@ -56,7 +56,11 @@ INSTRUCTIONS = (
     "removing them. To enable model review of rendered slides, the host must explicitly "
     "declare capabilities.experimental['ppt-agent'].samplingVision=true as well as sampling "
     "support during initialize; absent or false means screenshots are not sent to the model "
-    "and deterministic checks are used with a warning."
+    "and deterministic checks are used with a warning. Direct Responses-compatible "
+    "providers can be configured with PPT_AGENT_API_BASE_URL, PPT_AGENT_API_KEY, "
+    "PPT_AGENT_MODEL, and optionally PPT_AGENT_VISION_MODEL. A PPTX/HTML/PDF reference "
+    "is consumed only through ppt_agent_generate; image-based PDF pages are sent only "
+    "when vision support is explicitly configured."
 )
 
 

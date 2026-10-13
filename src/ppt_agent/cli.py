@@ -52,8 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("-o", "--out-dir", required=True, type=Path)
     build.add_argument("--stem", default="presentation", help="Base filename for the artifacts")
     build.add_argument("--title"); build.add_argument("--audience"); build.add_argument("--objective")
+    build.add_argument("--user-request", help="Original task brief passed unchanged to the planner")
+    build.add_argument("--max-pages", type=int, help="Maximum number of generated slides")
     build.add_argument("--renderer", help="Renderer name: native-pptx (default) or html")
     build.add_argument("--template", type=Path, help="Reference .pptx whose colours and fonts seed the design theme")
+    build.add_argument("--reference-html", type=Path, help="Optional HTML source for diagrams and visual context")
+    build.add_argument("--reference-pdf", type=Path, help="Optional PDF content/visual reference; OCR text works without a vision model")
     build.add_argument("--reference", type=Path, help="Reference deck for visual regression")
     build.add_argument("--no-gate", action="store_true", help="Skip the delivery gate")
     build.add_argument("--no-html", action="store_true", help="Skip the HTML preview")
@@ -64,6 +68,15 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--design-plan", type=Path, help="JSON page-plan (list or {pages:[...]}) that overrides the auto planner on the clone route")
     build.add_argument("--route", choices=["auto", "clone", "designed"], default="auto",
                        help="Force the generation route; auto prefers clone when --template is given")
+
+    build_v3 = sub.add_parser("build-v3", help="Build with the provenance-first V3 pipeline")
+    build_v3.add_argument("source", type=Path)
+    build_v3.add_argument("-o", "--out-dir", required=True, type=Path)
+    build_v3.add_argument("--task", type=Path, help="JSON task brief for audience, objective, tone and page budget")
+    build_v3.add_argument("--objective", help="One-line reporting objective")
+    build_v3.add_argument("--audience", help="Intended audience")
+    build_v3.add_argument("--max-pages", type=int)
+    build_v3.add_argument("--template", help="Builtin template id")
 
     caps = sub.add_parser("capabilities", help="Print the contract, host capabilities and renderer inventory")
     caps.add_argument("--host", help="Host profile: codex, workbuddy, doubao, claude, chatgpt")
@@ -167,6 +180,24 @@ def _print_capabilities(payload: dict) -> None:
     print("host profiles : " + ", ".join(profile["name"] for profile in payload["host_profiles"]))
 
 
+def _build_v3_task(args: argparse.Namespace) -> dict:
+    task: dict = {}
+    if args.task:
+        loaded = _read_json(args.task)
+        if not isinstance(loaded, dict):
+            raise SystemExit("V3 task JSON must be an object")
+        task.update(loaded)
+    task.update({
+        key: value for key, value in {
+            "objective": args.objective,
+            "audience": args.audience,
+            "max_pages": args.max_pages,
+            "template": args.template,
+        }.items() if value is not None
+    })
+    return task
+
+
 def _rasterise_preview(pptx: Path, output_dir: Path, dpi: float) -> list[Path]:
     """Render page previews with a real engine so they match what the user sees.
 
@@ -264,27 +295,83 @@ def main() -> int:
                 print(f"unsupported: slide={finding['slide']} component={finding['component']} claim={finding['claim'][:80]}")
         print(f"fact lock: {'PASS' if report['passed'] else 'FAIL'} ({report['supported']}/{report['checked']} claims supported)")
         return 0 if report["passed"] else 2
+    if args.command == "build-v3":
+        from .rebuild_pipeline import build_v3_deck
+        report = build_v3_deck(args.source, args.out_dir, task=_build_v3_task(args))
+        quality = report["quality"]
+        print(f"status  : {report['status'].upper()}")
+        print(f"pages   : {report['page_total']}")
+        print(f"template: {report['template']['id']} ({report['template']['source']})")
+        print(f"sources : {quality['content_quality']['source_coverage']:.1%}")
+        print(f"pptx    : {report['artifacts']['pptx']}")
+        if quality["content_quality"]["missing_source_blocks"]:
+            print(f"missing : {', '.join(quality['content_quality']['missing_source_blocks'])}")
+        if quality["visual_quality"].get("warning"):
+            print(f"warning : {quality['visual_quality']['warning']}")
+        return 0 if report["status"] == "passed" else 2
     if args.command == "build":
         agent = _agent()
         facts = json.loads(args.facts.read_text(encoding="utf-8")) if args.facts else None
         route_flag = getattr(args, "route", "auto")
-        use_pipeline = (route_flag == "clone") or (route_flag == "auto" and args.template and not args.ir)
+        use_pipeline = (route_flag == "clone") or (
+            route_flag == "auto"
+            and not args.ir
+            and any((
+                args.template,
+                args.reference_html,
+                args.reference_pdf,
+                args.user_request,
+            ))
+        )
         if use_pipeline:
             from .agent.pipeline import run_pipeline
             if not args.source:
                 raise SystemExit("clone route requires a Markdown source")
+            from .llm.provider import llm_fn_from_provider, resolve_provider
+            provider, provider_warning = resolve_provider(None)
+            llm_fn = llm_fn_from_provider(provider) if provider is not None else None
+            visual_critic = None
+            if provider is not None and getattr(provider, "supports_vision", False):
+                from .visual_critic import ModelVisualCritic
+                visual_critic = ModelVisualCritic(provider)
+                visual_review_reason = None
+            elif provider is None:
+                visual_review_reason = (
+                    f"{provider_warning} " if provider_warning else ""
+                ) + "未配置可用模型；仅运行确定性检查，无法完整判断页面视觉表达。"
+            else:
+                visual_review_reason = (
+                    "当前仅配置文本模型，未发送页面截图或 PDF 参考图；"
+                    "仅运行确定性检查，无法完整判断页面视觉表达。"
+                )
             design_plan = None
             if args.design_plan:
                 design_plan = json.loads(args.design_plan.read_text(encoding="utf-8-sig"))
+            task_spec = {
+                key: value for key, value in {
+                    "audience": args.audience,
+                    "objective": args.objective,
+                    "user_request": args.user_request,
+                    "max_pages": args.max_pages,
+                }.items() if value not in (None, "")
+            }
             report = run_pipeline(
                 args.source.read_text(encoding="utf-8"),
                 out_dir=args.out_dir,
                 template_path=args.template,
                 design_plan=design_plan,
                 assets_dir=getattr(args, "assets", None),
+                llm_fn=llm_fn,
+                task_spec=task_spec,
+                visual_critic=visual_critic,
+                visual_review_reason=visual_review_reason,
                 gate_deck=not args.no_gate,
                 reference_pptx=args.reference,
+                reference_html_path=args.reference_html,
+                reference_pdf_path=args.reference_pdf,
             )
+            if provider_warning:
+                report.setdefault("metadata", {})["provider_warning"] = provider_warning
             _write_json(Path(args.out_dir) / f"{args.stem}-pipeline.json", report)
             pptx_out = (report.get("artifacts") or {}).get("pptx")
             route_used = report.get("route")

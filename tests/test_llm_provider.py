@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import json
 import threading
 import time
 
@@ -10,11 +11,15 @@ import pytest
 
 from ppt_agent.llm import (
     ChatMessage,
+    ImageAttachment,
     LLMUnavailableError,
     MCPSamplingProvider,
     NullProvider,
     RuleFallbackProvider,
+    OpenAIResponsesProvider,
+    configured_provider,
     llm_fn_from_provider,
+    resolve_provider,
     sampling_supported,
     select_provider,
 )
@@ -98,6 +103,158 @@ def test_mcp_provider_unsupported_session_raises() -> None:
     assert session.calls == 0, "unsupported hosts must not be asked"
 
 
+class _HTTPResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self) -> bytes:
+        return self.payload
+
+
+def test_responses_provider_uses_configured_model_and_parses_output_text(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _HTTPResponse({"output_text": "storyboard"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIResponsesProvider(
+        "https://api.example/v1/responses",
+        "fresh-secret",
+        "text-model",
+        reasoning_effort="low",
+    )
+
+    result = provider.chat(
+        [ChatMessage("user", "make a deck")],
+        system="you are a planner",
+        max_tokens=321,
+    )
+
+    request = captured["request"]
+    body = json.loads(request.data)
+    assert result == "storyboard"
+    assert request.full_url == "https://api.example/v1/responses"
+    assert request.get_header("Authorization") == "Bearer fresh-secret"
+    assert body["model"] == "text-model"
+    assert body["max_output_tokens"] == 321
+    assert body["reasoning"] == {"effort": "low"}
+    assert body["input"][0]["role"] == "system"
+    assert body["input"][1]["content"][0] == {
+        "type": "input_text",
+        "text": "make a deck",
+    }
+    assert captured["timeout"] > 0
+    assert "fresh-secret" not in repr(provider)
+
+
+def test_responses_provider_routes_images_only_to_explicit_vision_model(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data)
+        return _HTTPResponse({
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "looks good"}],
+            }],
+        })
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIResponsesProvider(
+        "https://api.example/v1",
+        "fresh-secret",
+        "text-model",
+        vision_model="vision-model",
+    )
+    assert provider.supports_vision
+    assert provider.chat([ChatMessage(
+        "user",
+        "inspect",
+        images=(ImageAttachment(b"image-bytes", "image/png"),),
+    )]) == "looks good"
+
+    body = captured["body"]
+    assert body["model"] == "vision-model"
+    image = body["input"][0]["content"][1]
+    assert image["type"] == "input_image"
+    assert image["image_url"].startswith("data:image/png;base64,")
+
+
+def test_responses_provider_refuses_images_without_explicit_vision_model(monkeypatch) -> None:
+    provider = OpenAIResponsesProvider(
+        "https://api.example/v1/responses",
+        "fresh-secret",
+        "text-model",
+    )
+    called = False
+
+    def fake_urlopen(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(LLMUnavailableError, match="vision_model_not_configured"):
+        provider.chat([ChatMessage(
+            "user", "inspect",
+            images=(ImageAttachment(b"image-bytes", "image/png"),),
+        )])
+    assert not called
+
+
+def test_responses_provider_sanitizes_transport_errors(monkeypatch) -> None:
+    def fake_urlopen(*_args, **_kwargs):
+        raise RuntimeError("request failed with fresh-secret")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIResponsesProvider(
+        "https://api.example/v1/responses",
+        "fresh-secret",
+        "text-model",
+    )
+    with pytest.raises(LLMUnavailableError) as exc:
+        provider.chat([ChatMessage("user", "hello")])
+    assert "fresh-secret" not in str(exc.value)
+
+
+def test_provider_configuration_prefers_direct_and_discloses_incomplete_config() -> None:
+    direct, warning = configured_provider({
+        "PPT_AGENT_API_BASE_URL": "https://api.example/v1/responses",
+        "PPT_AGENT_API_KEY": "fresh-secret",
+        "PPT_AGENT_MODEL": "text-model",
+    })
+    assert isinstance(direct, OpenAIResponsesProvider)
+    assert not direct.supports_vision
+    assert warning is None
+
+    missing, warning = configured_provider({
+        "PPT_AGENT_API_BASE_URL": "https://api.example/v1/responses",
+        "PPT_AGENT_API_KEY": "fresh-secret",
+    })
+    assert missing is None
+    assert "PPT_AGENT_MODEL" in warning
+    assert "fresh-secret" not in warning
+
+
+def test_provider_resolution_uses_sampling_when_direct_configuration_is_partial() -> None:
+    session = FakeSession(supported=True, result=_sampling_result("host"))
+    provider, warning = resolve_provider(
+        session,
+        environ={"PPT_AGENT_API_KEY": "fresh-secret"},
+    )
+    assert isinstance(provider, MCPSamplingProvider)
+    assert warning and "PPT_AGENT_API_BASE_URL" in warning
+    assert "fresh-secret" not in warning
+
+
 def test_select_provider_honesty() -> None:
     assert isinstance(select_provider(FakeSession(supported=True)), MCPSamplingProvider)
     assert select_provider(FakeSession(supported=False)) is None
@@ -116,6 +273,34 @@ def test_narrative_via_provider_sampled_and_fallback() -> None:
     narrative = build_narrative(document, llm_fn=llm_fn_from_provider(bad))
     assert narrative["metadata"]["llm"] == "fallback"
     assert narrative["arc"], "fallback must keep the chain alive"
+
+
+def test_provider_callable_has_an_explicit_vision_only_image_path() -> None:
+    class RecordingProvider:
+        name = "recording"
+        supports_vision = True
+
+        def __init__(self):
+            self.messages = []
+
+        def chat(self, messages, **_kwargs):
+            self.messages.append(messages)
+            return "ok"
+
+    provider = RecordingProvider()
+    call = llm_fn_from_provider(provider)
+    image = ImageAttachment(b"image bytes", "image/jpeg")
+
+    assert call("text prompt") == "ok"
+    assert provider.messages[-1][0].images == ()
+    assert call.with_images("visual prompt", [image]) == "ok"
+    assert provider.messages[-1][0].images == (image,)
+
+    text_only = llm_fn_from_provider(MCPSamplingProvider(
+        FakeSession(result=_sampling_result("text only"))
+    ))
+    with pytest.raises(LLMUnavailableError, match="vision_not_declared"):
+        text_only.with_images("visual prompt", [image])
 
 
 def test_sampling_session_timeout_then_retry() -> None:

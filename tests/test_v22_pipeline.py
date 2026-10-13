@@ -1,10 +1,12 @@
 ﻿"""V2.2 pipeline integration tests: kind DNA + element cache + fingerprint."""
+import json
+
 import pytest
 
 pytest.importorskip("pptx")
 
 from ppt_agent.agent.plan_to_ir import plan_to_ir
-from ppt_agent.agent.pipeline import run_pipeline
+from ppt_agent.agent.pipeline import condense_plan, run_pipeline
 from ppt_agent.parsers import parse_markdown
 from ppt_agent.presentation_plan import build_presentation_plan
 from ppt_agent.page_kind_dna import build_page_kind_dna
@@ -77,6 +79,40 @@ class TestPlanToIRV22:
 
 
 class TestPipelineV22:
+    def test_condensation_merges_source_blocks_instead_of_dropping_them(self):
+        document = parse_markdown(
+            "# Deck\n\n## Chapter\n\n"
+            + "\n\n".join(f"- Item {i}" for i in range(1, 9))
+        )
+        plan = {
+            "pages": [
+                {"page_no": 1, "kind": "cover", "title": "Deck", "source_blocks": []},
+                {"page_no": 2, "kind": "section", "title": "Chapter", "source_blocks": []},
+                {"page_no": 3, "kind": "content", "title": "Chapter",
+                 "source_blocks": [document.blocks[2].id]},
+                {"page_no": 4, "kind": "content", "title": "Chapter",
+                 "source_blocks": [document.blocks[3].id]},
+                {"page_no": 5, "kind": "closing", "title": "谢谢", "source_blocks": []},
+            ]
+        }
+
+        condensed, report = condense_plan(plan, document, max_total=4)
+
+        before = {
+            block_id
+            for page in plan["pages"]
+            for block_id in page.get("source_blocks") or []
+        }
+        after = {
+            block_id
+            for page in condensed["pages"]
+            for block_id in page.get("source_blocks") or []
+        }
+        assert after == before
+        assert report["pages_merged"] == 1
+        assert report["source_blocks_merged"] == 1
+        assert [page["page_no"] for page in condensed["pages"]] == [1, 2, 3, 4]
+
     def test_v22_schema(self, tmp_path):
         report = run_pipeline(SAMPLE, out_dir=tmp_path / "out")
         assert report["schema"] == "pipeline/v2"
@@ -189,3 +225,106 @@ class TestPipelineV22:
         assert report["visual_review"]["status"] == "not_run"
         assert "门禁已关闭" in report["visual_review"]["warning"]
         assert "将退回确定性检查" not in report["visual_review"]["warning"]
+
+    def test_blocking_gate_finding_repairs_plan_and_rebuilds_full_deck(
+        self, tmp_path, monkeypatch
+    ):
+        from ppt_agent.sdk import PptAgent
+
+        source = "# Report\n\n## Results\n\n- Revenue reached 91%\n- Retention reached 72%"
+        document = parse_markdown(source)
+        cover = next(
+            block for block in document.blocks
+            if block.type == "heading" and block.level == 1
+        )
+        section = next(
+            block for block in document.blocks
+            if block.type == "heading" and block.level == 2
+        )
+        bullets = next(block for block in document.blocks if block.type == "bullets")
+        storyboard_response = {
+            "schema": "storyboard/v1",
+            "slides": [
+                {"kind": "cover", "title": "Report", "source_block_ids": [cover.id]},
+                {
+                    "kind": "content",
+                    "title": "Results",
+                    "source_block_ids": [section.id, bullets.id],
+                    "key_message": "Revenue reached 91%.",
+                    "archetype": "cards_grid",
+                    "layout_variant": "standard",
+                    "visual_form": "two-column evidence",
+                },
+            ],
+        }
+        gate_calls = []
+
+        def fake_gate(self, *_args, **_kwargs):
+            gate_calls.append(True)
+            passed = len(gate_calls) > 1
+            return {
+                "passed": passed,
+                "mode": "rendered",
+                "page_gate": {
+                    "passed": passed,
+                    "pages": [{
+                        "page": 2,
+                        "passed": passed,
+                        "issues": [] if passed else ["layout/overlap: body collision"],
+                    }],
+                },
+                "critic_gate": {"passed": True, "findings": [], "mode": "deterministic"},
+                "visual_review": {"status": "deterministic", "warning": None},
+            }
+
+        monkeypatch.setattr(PptAgent, "gate", fake_gate)
+        prompts = []
+
+        def fake_llm(prompt: str) -> str:
+            prompts.append(prompt)
+            if "storyboard-repair/v1" in prompt:
+                return json.dumps({
+                    "schema": "storyboard-repair/v1",
+                    "repairs": [{
+                        "page_no": 2,
+                        "archetype": "narrative",
+                        "layout_variant": "wide",
+                        "visual_form": "wide evidence rows",
+                    }],
+                })
+            return json.dumps(storyboard_response)
+
+        report = run_pipeline(
+            source,
+            out_dir=tmp_path / "repair-loop",
+            llm_fn=fake_llm,
+            task_spec={"max_pages": 3},
+            visual_critic=object(),
+        )
+
+        assert report["gates"]["delivery"]["passed"] is True
+        assert len(gate_calls) == 2
+        assert report["storyboard"]["slides"][1]["layout_variant"] == "wide"
+        assert report["storyboard"]["slides"][1]["archetype_name"] == "narrative"
+        loop = report["stages"]["repair"]["delivery_loop"]
+        assert len(loop["iterations"]) == 1
+        assert loop["iterations"][0]["applied_pages"] == [2]
+        assert len(prompts) == 2
+
+    def test_pdf_reference_is_disclosed_when_no_vision_model_is_available(
+        self, tmp_path
+    ):
+        pdf = tmp_path / "visual-reference.pdf"
+        pdf.write_bytes(b"reference placeholder")
+
+        report = run_pipeline(
+            SAMPLE,
+            out_dir=tmp_path / "pdf-reference",
+            gate_deck=False,
+            reference_pdf_path=pdf,
+        )
+
+        reference = report["stages"]["pdf_reference"]
+        assert reference["provided"] is True
+        assert reference["status"] == "content_extract_failed"
+        assert "PDF 内容未能提取" in reference["warning"]

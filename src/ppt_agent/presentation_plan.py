@@ -91,15 +91,37 @@ def build_presentation_plan(
 
         # tables paginate standalone
         remaining: list = []
+        subsection: str | None = None
         for block in children:
+            if block.type == "heading" and (block.level or 1) >= 3:
+                if remaining:
+                    _add_content_pages(
+                        add_page, heading, remaining, capacity,
+                        subsection=subsection,
+                    )
+                subsection = block.text or None
+                remaining = [block]
+                continue
             if block.type == "table":
                 if remaining:
-                    _add_content_pages(add_page, heading, remaining, capacity)
+                    _add_content_pages(
+                        add_page, heading, remaining, capacity,
+                        subsection=subsection,
+                    )
                     remaining = []
-                add_page("content", heading.text, [block], note="table page")
+                add_page(
+                    "content",
+                    heading.text,
+                    [block],
+                    note="table page",
+                    subsection=subsection,
+                )
             else:
                 remaining.append(block)
-        _add_content_pages(add_page, heading, remaining, capacity)
+        _add_content_pages(
+            add_page, heading, remaining, capacity,
+            subsection=subsection,
+        )
 
     add_page("closing", "谢谢", [])
 
@@ -164,7 +186,14 @@ def _title_body_units(blocks: list) -> list[list]:
     return units
 
 
-def _add_content_pages(add_page, heading, blocks: list, capacity: float) -> None:
+def _add_content_pages(
+    add_page,
+    heading,
+    blocks: list,
+    capacity: float,
+    *,
+    subsection: str | None = None,
+) -> None:
     """Greedy pagination of non-table blocks into content pages.
 
     Units are whole title+body pairs (see :func:`_title_body_units`), so a
@@ -177,12 +206,22 @@ def _add_content_pages(add_page, heading, blocks: list, capacity: float) -> None
     for unit in _title_body_units(blocks):
         unit_volume = sum(bl.char_volume() for bl in unit)
         if current and volume + unit_volume > capacity:
-            add_page("content", heading.text, current)
+            add_page(
+                "content",
+                heading.text,
+                current,
+                subsection=subsection,
+            )
             current, volume = [], 0.0
         current.extend(unit)
         volume += unit_volume
     if current:
-        add_page("content", heading.text, current)
+        add_page(
+            "content",
+            heading.text,
+            current,
+            subsection=subsection,
+        )
 
 
 __all__ = ["SCHEMA", "build_presentation_plan", "page_capacity"]

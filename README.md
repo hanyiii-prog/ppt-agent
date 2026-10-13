@@ -15,7 +15,25 @@
 - **中文文档：** 当前 README
 - **English:** see the English sections below
 
-## 当前版本：V2.0.0（Fidelity Engine GA，main 分支）
+## 当前版本：V3.0.0（Provenance-first V3 Pipeline，feature/v2.1-full 分支）
+
+V3.0.0 引入 `build-v3` 溯源优先生成链路。它先建立 SourcePack、EvidenceGraph、DeckBrief、Outline、TemplateProfile 和 PageDesignIR，再编译为 PPTX / HTML；输出会保留每个中间契约文件，质量报告说明来源覆盖率、页数一致性和视觉审查是否运行。没有配置模型时自动走保守规则规划；配置模型后，模型规划结果仍要经过本地校验和补齐。
+
+```bash
+# 不依赖模型，先跑通规则规划链路
+ppt-agent build-v3 source.md -o workspace --objective "project progress report" --max-pages 8
+
+# 使用内置模板 ID
+ppt-agent build-v3 source.md -o workspace --template project-progress
+```
+
+Python API：
+
+```python
+from ppt_agent import build_v3_deck
+
+report = build_v3_deck("source.md", "workspace", task={"max_pages": 8})
+```
 
 V2.0.0 建成 **Fidelity Engine 高保真闭环**——不再满足于“结构相似”，而是把“成品像不像参考”变成可验证、可迭代的工程闭环：
 
@@ -464,7 +482,7 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 ## 测试
 
 ```bash
-pytest -q                      # 355 项
+pytest -q
 ppt-agent benchmark benchmarks/cases -o dist/benchmark-report.json
 python scripts/release.py build && python scripts/release.py verify
 ```
@@ -499,6 +517,8 @@ V1.10 puts the clone route on the MCP tool surface, so one server is the whole e
 page plan → one shell per spec, dispatched to the page kits, audited) and
 `ppt_agent_clone_audit` (the six-kind page gate). A host agent now drives the
 byte-identical-template route without writing Python.
+
+V3.0.0 adds the `build-v3` provenance-first pipeline: SourcePack → EvidenceGraph → DeckBrief → Outline → TemplateProfile → PageDesignIR → PPTX/HTML, with every contract artifact written to disk and a quality report that discloses source coverage, page consistency and whether visual review actually ran. Rule planning works without a model; model planning remains locally validated.
 
 V2.0.0 (Fidelity Engine GA, formerly `v1.11-fidelity-engine`) builds the **Fidelity Engine closed loop** — a verifiable,
 iterative pipeline that compares the generated deck against the reference at both structure and
