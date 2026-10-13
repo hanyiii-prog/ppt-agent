@@ -393,13 +393,47 @@ def tool_narrative_plan(arguments: dict[str, Any], context: ToolContext) -> dict
 
 def tool_generate(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
     from ..agent.pipeline import run_pipeline
+    from ..llm.provider import llm_fn_from_provider, select_provider
+    from ..visual_critic import ModelVisualCritic
 
     text = _read_text(arguments, context, source_key="source", inline_key="markdown")
     out_dir = _optional_string(arguments, "out_dir") or "pipeline"
     density = (_optional_string(arguments, "density") or "standard").lower()
     if density not in ("compact", "standard", "air"):
         raise ToolError("'density' must be compact, standard or air")
-    return run_pipeline(text, out_dir=context.output_path(out_dir), density=density)
+    task_spec = arguments.get("task_spec")
+    if task_spec is not None and not isinstance(task_spec, dict):
+        raise ToolError("'task_spec' must be an object")
+    provider = select_provider(context.session)
+    llm_fn = llm_fn_from_provider(provider) if provider is not None else None
+    visual_critic = None
+    if provider is not None and provider.supports_vision:
+        visual_critic = ModelVisualCritic(provider)
+        visual_review_reason = None
+    elif provider is None:
+        visual_review_reason = (
+            "当前宿主未提供模型采样能力；将只运行 Agent 可用的确定性检查，"
+            "无法完整判断页面审美与视觉表达。"
+        )
+    elif getattr(context.session, "vision_supported", None) is False:
+        visual_review_reason = (
+            "当前模型声明不支持图像输入；将退回确定性检查，"
+            "无法完整判断页面审美与视觉表达。"
+        )
+    else:
+        visual_review_reason = (
+            "当前宿主未声明模型视觉能力，Agent 未向模型发送页面截图；"
+            "将退回确定性检查，无法完整判断页面审美与视觉表达。"
+        )
+    return run_pipeline(
+        text,
+        out_dir=context.output_path(out_dir),
+        density=density,
+        llm_fn=llm_fn,
+        task_spec=task_spec,
+        visual_critic=visual_critic,
+        visual_review_reason=visual_review_reason,
+    )
 
 
 TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str, Any]]] = {
@@ -752,6 +786,10 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "source": {"type": "string", "description": "Path to a Markdown file"},
                 "out_dir": {"type": "string", "description": "Output directory inside the workspace (default 'pipeline')"},
                 "density": {"type": "string", "enum": ["compact", "standard", "air"]},
+                "task_spec": {
+                    "type": "object",
+                    "description": "Audience, objective, page budget and visual constraints for model-authored storyboarding",
+                },
             },
         ),
     },

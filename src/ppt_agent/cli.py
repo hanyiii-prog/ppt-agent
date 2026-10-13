@@ -283,6 +283,7 @@ def main() -> int:
                 design_plan=design_plan,
                 assets_dir=getattr(args, "assets", None),
                 gate_deck=not args.no_gate,
+                reference_pptx=args.reference,
             )
             _write_json(Path(args.out_dir) / f"{args.stem}-pipeline.json", report)
             pptx_out = (report.get("artifacts") or {}).get("pptx")
@@ -300,6 +301,9 @@ def main() -> int:
                 print(f"gate  : {verdict}")
             elif gate:
                 print(f"gate  : {gate.get("mode", "skipped")}")
+            visual_review = report.get("visual_review") or {}
+            if visual_review.get("warning"):
+                print(f"warning: {visual_review['warning']}")
             if args.preview and pptx_out:
                 pv = _rasterise_preview(pptx_out, Path(args.out_dir) / f"{args.stem}-preview", args.preview_dpi)
                 msg = f"preview: {len(pv)} page(s) -> {pv[0].parent}" if pv else "preview: no pages"

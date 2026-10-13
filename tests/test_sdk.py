@@ -93,6 +93,34 @@ def test_build_can_disable_gates_and_html(sample_markdown, workspace: Path):
     assert Path(outcome.pptx_path).exists()
 
 
+def test_build_surfaces_visual_review_fallback_warning(
+    sample_markdown,
+    workspace: Path,
+    monkeypatch,
+):
+    def fake_gate(self, pptx, *, workspace, reference=None, policy=None,
+                  critic=None, visual_review_reason=None):
+        return {
+            "passed": True,
+            "mode": "rendered",
+            "degraded": [],
+            "visual_review": {
+                "status": "deterministic_fallback",
+                "mode": "rendered",
+                "warning": "当前未启用视觉模型，已运行确定性检查。",
+            },
+        }
+
+    monkeypatch.setattr(PptAgent, "gate", fake_gate)
+    outcome = PptAgent().build(
+        markdown=sample_markdown,
+        out_dir=workspace,
+        emit_html=False,
+    )
+
+    assert "当前未启用视觉模型，已运行确定性检查。" in outcome.warnings
+
+
 def test_build_from_an_existing_ir(sample_markdown, workspace: Path):
     pytest.importorskip("pptx")
     agent = PptAgent()
@@ -149,6 +177,8 @@ def test_gate_degrades_to_structural_checks_without_a_rasteriser(sample_markdown
     assert report["degraded"] == ["render_preview"]
     assert report["page_gate"]["mode"] == "structural"
     assert report["critic_gate"] is None and report["visual_gate"] is None
+    assert report["visual_review"]["mode"] == "structural"
+    assert "仅完成结构检查" in report["visual_review"]["warning"]
     assert report["passed"] is True
     assert report["candidate"] == deck
 
@@ -170,12 +200,21 @@ def test_gate_uses_the_rendered_pipeline_when_a_rasteriser_exists(workspace: Pat
 
     monkeypatch.setattr("ppt_agent.visual_regression.rasteriser_available", lambda: True)
     monkeypatch.setattr(delivery, "render_pptx", lambda path, out, **kwargs: [_fake_png(out)])
-    monkeypatch.setattr(delivery, "review_pages", lambda pages, critic=None: CriticReport(True))
+    monkeypatch.setattr(
+        delivery,
+        "review_pages",
+        lambda pages, critic=None, fallback_reason=None: CriticReport(True),
+    )
 
     report = PptAgent().gate(deck, workspace=workspace / "qa")
     assert report["mode"] == "rendered"
     assert report["degraded"] == []
-    assert report["critic_gate"] == {"passed": True, "findings": []}
+    assert report["critic_gate"] == {
+        "passed": True,
+        "findings": [],
+        "mode": "deterministic",
+        "warning": None,
+    }
     assert report["visual_gate"] is None
     assert report["passed"] is True
 

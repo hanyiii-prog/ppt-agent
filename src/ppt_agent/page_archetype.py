@@ -117,6 +117,12 @@ def annotate_plan(plan: dict[str, Any], document: ContentDocument) -> dict[str, 
     for page in annotated.get("pages", []):
         if page.get("kind") != "content":
             continue
+        existing = page.get("archetype")
+        if (
+            isinstance(existing, dict)
+            and existing.get("archetype") in ARCHETYPES
+        ):
+            continue
         blocks = _blocks_of(document, page.get("source_blocks") or [])
         page["archetype"] = select_archetype(blocks)
     annotated["metadata"] = {

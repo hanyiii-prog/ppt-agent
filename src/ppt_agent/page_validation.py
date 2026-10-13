@@ -93,6 +93,67 @@ def _is_zero_size(shape) -> bool:
     return width <= 0 or height <= 0
 
 
+def _rgb_tuple(color) -> tuple[int, int, int] | None:
+    try:
+        rgb = color.rgb
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if rgb is None:
+        return None
+    return tuple(int(value) for value in rgb)
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    channels = []
+    for value in rgb:
+        channel = value / 255.0
+        channels.append(channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def _contrast_issues(slide, page: int) -> list[str]:
+    """Catch explicitly colored low-contrast text on solid slide backgrounds."""
+    try:
+        fill = slide.background.fill
+        from pptx.enum.dml import MSO_FILL
+
+        if fill.type != MSO_FILL.SOLID:
+            return []
+        background = _rgb_tuple(fill.fore_color)
+    except (AttributeError, TypeError, ValueError):
+        return []
+    if background is None:
+        return []
+
+    issues: list[str] = []
+    bg_luminance = _relative_luminance(background)
+    for shape in slide.shapes:
+        if not getattr(shape, "has_text_frame", False) or not shape.text.strip():
+            continue
+        for paragraph in shape.text_frame.paragraphs:
+            for run in paragraph.runs:
+                if not run.text.strip():
+                    continue
+                text_rgb = _rgb_tuple(run.font.color)
+                if text_rgb is None:
+                    # Theme/master inheritance cannot be resolved reliably
+                    # from a run's direct RGB value; do not guess and block.
+                    continue
+                text_luminance = _relative_luminance(text_rgb)
+                high, low = sorted((text_luminance, bg_luminance), reverse=True)
+                ratio = (high + 0.05) / (low + 0.05)
+                if ratio < 4.5:
+                    label = "".join(run.text.split())[:32]
+                    issues.append(
+                        f"text contrast below 4.5:1 on page {page} "
+                        f"(ratio {ratio:.2f}:1, text={label!r})"
+                    )
+                    break
+            if issues:
+                break
+    return issues
+
+
 def validate_deck_structure(pptx: Path) -> list[tuple[int, int, int, list[str]]]:
     prs = Presentation(str(pptx))
     sw, sh = prs.slide_width, prs.slide_height
@@ -125,6 +186,8 @@ def validate_structural_pages(pptx: Path) -> DeckGateReport:
         role = infer_page_role(index, slide_count, _title_text(slide) if slide else "")
         text_shapes, image_shapes = _shape_stats(slide) if slide else (0, 0)
         problems = list(issues)
+        if slide is not None:
+            problems.extend(_contrast_issues(slide, index))
         if shape_count == 0:
             problems.append("slide contains no shapes")
         pages.append(
@@ -156,6 +219,8 @@ def validate_rendered_pages(pptx: Path, rendered_pages: list[Path], blank_thresh
             issues.append(f"{oob} shape(s) exceed slide bounds")
         if zero:
             issues.append(f"{zero} shape(s) have zero/negative size")
+        if slide is not None:
+            issues.extend(_contrast_issues(slide, i))
         pages.append(PageGate(i, shape_count, oob, zero, width, height, near_white,
                               not issues, issues, role, text_shapes, image_shapes))
     passed = len(structure) == len(rendered_pages) and all(p.passed for p in pages)

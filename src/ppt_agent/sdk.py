@@ -199,6 +199,8 @@ class PptAgent:
         workspace: str | Path,
         reference: str | Path | None = None,
         policy: Any = None,
+        critic: Any = None,
+        visual_review_reason: str | None = None,
     ) -> dict[str, Any]:
         """Run the delivery gate, degrading to structural checks when needed."""
         from .page_validation import validate_structural_pages
@@ -210,11 +212,19 @@ class PptAgent:
         if "render_preview" in self.adapter.effective():
             from .delivery import DeliveryPolicy, validate_delivery
 
+            fallback_reason = visual_review_reason
+            if critic is None and fallback_reason is None:
+                fallback_reason = (
+                    "未启用经确认的视觉模型；已运行确定性视觉检查，"
+                    "但无法完整判断审美与视觉表达。"
+                )
             page_gate, critic_gate, visual_gate = validate_delivery(
                 deck,
                 target,
                 reference_pptx=Path(reference) if reference else None,
                 policy=policy or DeliveryPolicy(),
+                critic=critic,
+                visual_review_reason=fallback_reason,
             )
             passed = (
                 page_gate.passed
@@ -227,6 +237,11 @@ class PptAgent:
                 "candidate": str(deck),
                 "page_gate": page_gate.to_dict(),
                 "critic_gate": critic_gate.to_dict(),
+                "visual_review": {
+                    "status": critic_gate.mode,
+                    "mode": "rendered",
+                    "warning": critic_gate.warning,
+                },
                 "visual_gate": visual_gate.to_dict() if visual_gate else None,
                 "degraded": degraded,
             }
@@ -246,6 +261,16 @@ class PptAgent:
             "candidate": str(deck),
             "page_gate": structural.to_dict(),
             "critic_gate": None,
+            "visual_review": {
+                "status": "deterministic_fallback",
+                "mode": "structural",
+                "warning": (
+                    f"{visual_review_reason} 当前环境无法渲染页面，"
+                    "仅完成结构检查；未执行页面图像检查。"
+                    if visual_review_reason
+                    else "当前环境无法渲染页面，仅完成结构检查；未执行页面图像检查。"
+                ),
+            },
             "visual_gate": None,
             "degraded": degraded,
         }
@@ -333,6 +358,9 @@ class PptAgent:
             gate_result = self.gate(
                 render_result.path, workspace=output_dir / "qa", reference=reference
             )
+            review_warning = (gate_result.get("visual_review") or {}).get("warning")
+            if review_warning and review_warning not in warnings:
+                warnings.append(review_warning)
             manifest = self._manifest(gate_result, reference=reference)
 
         fact_audit = self.audit_facts(presentation, facts) if facts is not None else None

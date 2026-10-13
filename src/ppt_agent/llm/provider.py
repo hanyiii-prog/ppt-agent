@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import base64
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol, runtime_checkable
@@ -33,6 +34,13 @@ class LLMUnavailableError(RuntimeError):
 class ChatMessage:
     role: str            # "user" | "assistant"
     content: str
+    images: tuple["ImageAttachment", ...] = ()
+
+
+@dataclass(frozen=True)
+class ImageAttachment:
+    data: bytes
+    mime_type: str
 
 
 @runtime_checkable
@@ -62,6 +70,20 @@ def sampling_supported(client_capabilities: dict[str, Any] | None) -> bool:
     return sampling is True
 
 
+def sampling_vision_supported(client_capabilities: dict[str, Any] | None) -> bool | None:
+    """Read the ppt-agent vision extension; sampling alone does not imply vision."""
+    if not isinstance(client_capabilities, dict):
+        return None
+    experimental = client_capabilities.get("experimental")
+    if not isinstance(experimental, dict):
+        return None
+    ppt_agent = experimental.get("ppt-agent")
+    if not isinstance(ppt_agent, dict):
+        return None
+    vision = ppt_agent.get("samplingVision")
+    return vision if isinstance(vision, bool) else None
+
+
 class MCPSamplingProvider:
     """Host-delegated model access via the MCP sampling session."""
 
@@ -71,6 +93,10 @@ class MCPSamplingProvider:
         # session: ppt_agent.mcp.sampling.SamplingSession (typed loosely to
         # keep the llm package importable without the mcp package)
         self.session = session
+
+    @property
+    def supports_vision(self) -> bool:
+        return getattr(self.session, "vision_supported", None) is True
 
     def chat(
         self,
@@ -83,11 +109,26 @@ class MCPSamplingProvider:
         # pre-check: an unsupported host must never be asked at all
         if not getattr(self.session, "supported", False):
             raise LLMUnavailableError("host_without_sampling")
+        if any(message.images for message in messages) and not self.supports_vision:
+            raise LLMUnavailableError("host_vision_not_declared")
+        serialized_messages: list[dict[str, Any]] = []
+        for message in messages:
+            if message.content:
+                serialized_messages.append({
+                    "role": message.role,
+                    "content": {"type": "text", "text": message.content},
+                })
+            for image in message.images:
+                serialized_messages.append({
+                    "role": message.role,
+                    "content": {
+                        "type": "image",
+                        "data": base64.b64encode(image.data).decode("ascii"),
+                        "mimeType": image.mime_type,
+                    },
+                })
         request: dict[str, Any] = {
-            "messages": [
-                {"role": message.role, "content": {"type": "text", "text": message.content}}
-                for message in messages
-            ],
+            "messages": serialized_messages,
             "maxTokens": int(max_tokens),
         }
         if system:

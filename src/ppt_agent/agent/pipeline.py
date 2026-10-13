@@ -25,6 +25,7 @@ from ..narrative_engine import build_narrative
 from ..page_archetype import annotate_plan
 from ..parsers import parse_markdown
 from ..presentation_plan import build_presentation_plan
+from ..storyboard import build_storyboard, storyboard_to_plan
 from ..fidelity_mode import gates_report, resolve_fidelity_mode
 from ..template_fingerprint import check_template_consistency
 from ..sdk import PptAgent
@@ -34,10 +35,15 @@ MAX_TOTAL_PAGES = 25
 
 
 def _detect_rasterizer() -> bool:
+    """Report whether a real Office rasteriser is available.
+
+    Pillow is only an image-processing dependency; it cannot reproduce the
+    PowerPoint master/background/crop semantics used by the clone route.
+    """
     try:
-        import PIL  # noqa: F401
-        return True
-    except ImportError:
+        from ..render_real import real_backend
+        return real_backend() is not None
+    except Exception:
         return False
 
 
@@ -579,15 +585,24 @@ def run_pipeline(
     agent: PptAgent | None = None,
     gate_deck: bool = True,
     template_path: str | Path | None = None,
+    reference_pptx: str | Path | None = None,
     template_dna: dict[str, Any] | None = None,
     design_dna: dict[str, Any] | None = None,
     design_plan: list[dict[str, Any]] | dict[str, Any] | None = None,
     assets_dir: str | Path | None = None,
+    task_spec: dict[str, Any] | None = None,
+    visual_critic: Any = None,
+    visual_review_reason: str | None = None,
 ) -> dict[str, Any]:
     """Markdown -> delivered deck + the full decision report."""
     agent = agent or PptAgent()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    if gate_deck and visual_critic is None and visual_review_reason is None:
+        visual_review_reason = (
+            "未声明或启用经确认的视觉模型；将退回确定性检查，"
+            "无法完整判断页面审美与视觉表达。"
+        )
 
     has_template = template_path is not None and Path(template_path).exists()
     if has_template and not template_dna:
@@ -610,8 +625,33 @@ def run_pipeline(
 
     document = parse_markdown(markdown, source="pipeline")
     analyzed = analyze_content(document)
-    narrative = build_narrative(analyzed, llm_fn=llm_fn)
-    plan = build_presentation_plan(analyzed, density=density)
+    task_spec = task_spec if isinstance(task_spec, dict) else {}
+    storyboard_result = build_storyboard(
+        analyzed,
+        llm_fn=llm_fn,
+        constraints=task_spec,
+    )
+    storyboard = storyboard_result["storyboard"]
+    if storyboard is not None:
+        narrative = build_narrative(analyzed)
+        narrative["mode"] = "storyboard"
+        narrative["arc"] = [
+            page["title"] for page in storyboard["slides"]
+            if page["kind"] in ("section", "content")
+        ]
+        narrative["metadata"] = {"llm": "sampled", "engine": "storyboard/v1"}
+        plan = storyboard_to_plan(storyboard, analyzed, density=density)
+        plan_source = "storyboard"
+    elif llm_fn is not None and storyboard_result.get("raw_response") is not None:
+        raw_response = storyboard_result["raw_response"]
+        narrative = build_narrative(analyzed, llm_fn=lambda _prompt: raw_response)
+        plan = build_presentation_plan(analyzed, density=density)
+        plan_source = "rules_fallback"
+    else:
+        narrative = build_narrative(analyzed)
+        plan = build_presentation_plan(analyzed, density=density)
+        plan_source = "rules"
+    plan["task_spec"] = task_spec
 
     condensation_report = {
         "original": len(plan.get("pages") or []),
@@ -626,6 +666,9 @@ def run_pipeline(
     # and wrongly collapsed decks to ~11 pages; MAX_TOTAL_PAGES (<=25) is the
     # only real ceiling, per the design brief.
     max_total = MAX_TOTAL_PAGES
+    requested_max = task_spec.get("max_pages")
+    if isinstance(requested_max, int) and not isinstance(requested_max, bool) and requested_max > 0:
+        max_total = min(max_total, requested_max)
     if design_plan:
         # An externally designed plan is authoritative -- do not condense it.
         max_total = max(max_total, len(design_plan if isinstance(design_plan, list) else design_plan.get("pages") or []))
@@ -708,6 +751,7 @@ def run_pipeline(
         presentation, element_cache = plan_to_ir(
             annotated, analyzed, title=document.title,
             llm_fn=llm_fn, template_fingerprint=fingerprint, layout_engine=engine,
+            storyboard_mode=storyboard is not None,
         )
         boxes = [
             {"x": c.x or 0, "y": c.y or 0, "w": c.w or 1, "h": c.h or 1,
@@ -724,11 +768,37 @@ def run_pipeline(
         artifacts["element_cache"] = element_cache
 
     gate_report = {"passed": None, "mode": "skipped"}
-    if gate_deck and artifacts.get("pptx") and Path(artifacts["pptx"]).exists():
+    visual_review = {
+        "status": "not_run",
+        "mode": "none",
+        "warning": None,
+    }
+    has_gate_deck = bool(artifacts.get("pptx")) and Path(artifacts["pptx"]).exists()
+    if gate_deck and has_gate_deck:
         try:
-            gate_report = agent.gate(Path(artifacts["pptx"]), workspace=out / "qa")
+            gate_report = agent.gate(
+                Path(artifacts["pptx"]),
+                workspace=out / "qa",
+                reference=reference_pptx,
+                critic=visual_critic,
+                visual_review_reason=visual_review_reason,
+            )
+            visual_review = gate_report.get("visual_review") or {
+                "status": "deterministic_fallback",
+                "mode": gate_report.get("mode", "unknown"),
+                "warning": visual_review_reason,
+            }
         except Exception as exc:
             gate_report = {"passed": False, "mode": "error", "error": str(exc)}
+            visual_review = {
+                "status": "not_run",
+                "mode": "error",
+                "warning": "交付门禁未能运行，无法完成页面视觉审阅。",
+            }
+    elif not gate_deck:
+        visual_review["warning"] = "交付门禁已关闭，未运行模型视觉审阅或确定性检查。"
+    elif not has_gate_deck:
+        visual_review["warning"] = "未生成可供检查的 PPTX，交付门禁和视觉审阅未运行。"
 
     if route == "clone" and artifacts.get("pptx"):
         try:
@@ -753,7 +823,12 @@ def run_pipeline(
             "parse": {"format": document.format, "blocks": len(document.blocks)},
             "analyze": {"analyzer": analyzed.metadata.get("analyzer")},
             "narrative": {"mode": narrative["mode"], "arc": narrative["arc"]},
-            "plan": {"page_total": plan["page_total"]},
+            "plan": {
+                "page_total": plan["page_total"],
+                "source": plan_source,
+                "storyboard_error": storyboard_result.get("error"),
+                "task_spec": task_spec,
+            },
             "condensation": condensation_report,
             "archetypes": {
                 page["page_no"]: (page.get("archetype") or {}).get("archetype")
@@ -763,6 +838,7 @@ def run_pipeline(
             "repair": repair_report,
         },
         "design_plan": {"source": design_plan_source},
+        "storyboard": storyboard,
         "artifacts": artifacts,
         "clone_audit": audit_report,
         "element_cache": _element_cache_for_report(route, artifacts),
@@ -774,7 +850,12 @@ def run_pipeline(
             ),
             "delivery": gate_report,
         },
-        "metadata": {"llm": narrative["metadata"]["llm"], "pipeline": f"{route}+rules"},
+        "visual_review": visual_review,
+        "metadata": {
+            "llm": narrative["metadata"]["llm"],
+            "storyboard_llm": storyboard_result["metadata"]["llm"],
+            "pipeline": f"{route}+{plan_source}",
+        },
     }
 
 

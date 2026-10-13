@@ -17,7 +17,9 @@ import io
 import json
 from pathlib import Path
 
+from ppt_agent.mcp import ToolContext, build_agent
 from ppt_agent.mcp.server import serve
+from ppt_agent.mcp.tools import tool_generate
 
 MARKDOWN = """# 上线总结
 
@@ -119,3 +121,41 @@ def test_sampling_error_response_falls_back_and_discloses(workspace: Path) -> No
     assert narrative["metadata"]["llm"] == "fallback"
     assert narrative["mode"] == "rules"
     assert narrative["arc"]
+
+
+def test_generate_passes_host_sampling_and_task_spec_into_storyboard(tmp_path: Path, monkeypatch) -> None:
+    class Session:
+        supported = True
+
+        def __init__(self):
+            self.requests = []
+
+        def create_message(self, request):
+            self.requests.append(request)
+            return {"content": {"text": '{"schema":"storyboard/v1","slides":[]}'}}
+
+    session = Session()
+    context = ToolContext(agent=build_agent(), workspace=tmp_path, session=session)
+    captured = {}
+
+    def fake_pipeline(markdown, **kwargs):
+        captured["markdown"] = markdown
+        captured.update(kwargs)
+        captured["model_response"] = kwargs["llm_fn"]("design prompt")
+        return {"ok": True}
+
+    monkeypatch.setattr("ppt_agent.agent.pipeline.run_pipeline", fake_pipeline)
+    result = tool_generate(
+        {
+            "markdown": MARKDOWN,
+            "out_dir": "generated",
+            "task_spec": {"audience": "executives", "max_pages": 8},
+        },
+        context,
+    )
+
+    assert result == {"ok": True}
+    assert captured["task_spec"] == {"audience": "executives", "max_pages": 8}
+    assert captured["markdown"] == MARKDOWN
+    assert captured["model_response"].startswith('{"schema":"storyboard/v1"')
+    assert session.requests[0]["messages"][0]["content"]["text"] == "design prompt"

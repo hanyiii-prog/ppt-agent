@@ -762,16 +762,18 @@ def org_chart(slide, top_node, groups, depts, note=None, *, title="", lead=None,
             anchor=MSO_ANCHOR.MIDDLE)
         ny += 0.83
     # connectors down to the department row
-    dep_y = 3.80
-    _hair(slide, lx + lw2 / 2, chip_y + 0.69, 0.02, 0.22)
-    dep_bus_y = dep_y - 0.22
-    _hair(slide, lx + lw2 / 2, dep_bus_y, 0.02, 0.22)
-    # dept cards (3 across the left column width)
     nd = len(depts)
-    dgap = 0.15
-    dw = (lw2 - dgap * (nd - 1)) / nd
-    hub_x = lx + lw2 / 2
+    dep_y = 3.80
+    # Department row (connectors + cards) only renders when depts are supplied;
+    # with an empty list the connector below dangles and the width division
+    # by nd would raise ZeroDivisionError.
     if nd:
+        _hair(slide, lx + lw2 / 2, chip_y + 0.69, 0.02, 0.22)
+        dep_bus_y = dep_y - 0.22
+        _hair(slide, lx + lw2 / 2, dep_bus_y, 0.02, 0.22)
+        dgap = 0.15
+        dw = (lw2 - dgap * (nd - 1)) / nd
+        hub_x = lx + lw2 / 2
         _hair(slide, lx + dw / 2, dep_bus_y, hub_x - (lx + dw / 2), 0.02)
         _hair(slide, hub_x, dep_bus_y, lx + dw * (nd - 1) + dw / 2 - hub_x, 0.02)
     dep_h = 2.60

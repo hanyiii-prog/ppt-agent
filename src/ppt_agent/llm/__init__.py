@@ -17,6 +17,7 @@ run is never silent.
 
 from .provider import (
     ChatMessage,
+    ImageAttachment,
     LLMProvider,
     LLMUnavailableError,
     MCPSamplingProvider,
@@ -25,10 +26,12 @@ from .provider import (
     llm_fn_from_provider,
     select_provider,
     sampling_supported,
+    sampling_vision_supported,
 )
 
 __all__ = [
     "ChatMessage",
+    "ImageAttachment",
     "LLMProvider",
     "LLMUnavailableError",
     "MCPSamplingProvider",
@@ -37,4 +40,5 @@ __all__ = [
     "llm_fn_from_provider",
     "select_provider",
     "sampling_supported",
+    "sampling_vision_supported",
 ]

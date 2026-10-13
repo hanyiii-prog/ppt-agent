@@ -48,6 +48,7 @@ class SamplingSession:
         self.timeout_s = float(timeout_s)
         self.retries = int(retries)
         self.supported = False          # set from the client initialize handshake
+        self.vision_supported: bool | None = None
         self._pending: dict[str, queue.Queue[dict[str, Any]]] = {}
         self._id_counter = 0
 

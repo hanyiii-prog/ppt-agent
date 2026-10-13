@@ -25,7 +25,11 @@ from typing import Any, TextIO
 from .. import __version__
 from ..adapters import create_adapter
 from ..contracts import MCP_PROTOCOL_VERSIONS
-from ..llm.provider import LLMUnavailableError, sampling_supported
+from ..llm.provider import (
+    LLMUnavailableError,
+    sampling_supported,
+    sampling_vision_supported,
+)
 from ..sdk import PptAgent
 from .protocol import (
     INTERNAL_ERROR,
@@ -49,7 +53,10 @@ INSTRUCTIONS = (
     "complete deck and gate every page before delivery, and never invent metrics, dates or "
     "conclusions. Call ppt_agent_capabilities first to learn which gates the host can run; "
     "a missing rasteriser degrades visual checks to structural geometry checks rather than "
-    "removing them."
+    "removing them. To enable model review of rendered slides, the host must explicitly "
+    "declare capabilities.experimental['ppt-agent'].samplingVision=true as well as sampling "
+    "support during initialize; absent or false means screenshots are not sent to the model "
+    "and deterministic checks are used with a warning."
 )
 
 
@@ -74,9 +81,11 @@ def handle_message(
         version = requested if requested in MCP_PROTOCOL_VERSIONS else DEFAULT_PROTOCOL_VERSION
         client_capabilities = params.get("capabilities")
         if context.session is not None:
+            capabilities = client_capabilities if isinstance(client_capabilities, dict) else None
             context.session.supported = sampling_supported(
-                client_capabilities if isinstance(client_capabilities, dict) else None
+                capabilities
             )
+            context.session.vision_supported = sampling_vision_supported(capabilities)
         return success(request_id, {
             "protocolVersion": version,
             "capabilities": {"tools": {"listChanged": False}},

@@ -74,7 +74,7 @@ def merge_layout_audit(
         if kind in _HARD_AUDIT_KINDS:
             bucket = "hard"
         elif kind == "overflow":
-            bucket = "warn"
+            bucket = "hard" if _overflow_is_hard(msg, overflow_hard_tol_in) else "warn"
         else:
             continue
         entry = by_page.setdefault(page, {"hard": [], "warn": []})
@@ -170,13 +170,18 @@ def validate_delivery(
     reference_pptx: Path | None = None,
     policy: DeliveryPolicy | None = None,
     critic: VisualCritic | None = None,
+    visual_review_reason: str | None = None,
 ) -> tuple[DeckGateReport, CriticReport, VisualReport | None]:
     """Run the complete production gate over the actual candidate deck."""
     policy = policy or DeliveryPolicy()
     rendered = render_pptx(pptx, workspace / "rendered")
     page_gate = validate_rendered_pages(pptx, rendered, blank_threshold=policy.blank_threshold)
     page_gate = merge_layout_audit(page_gate, run_layout_audit(pptx))
-    critic_gate = review_pages(rendered, critic)
+    critic_gate = review_pages(
+        rendered,
+        critic,
+        fallback_reason=visual_review_reason,
+    )
     visual_gate = None
     if reference_pptx is not None:
         visual_gate = render_and_compare(
@@ -195,6 +200,7 @@ def run_repair_loop(
     reference_pptx: Path | None = None,
     policy: DeliveryPolicy | None = None,
     critic: VisualCritic | None = None,
+    visual_review_reason: str | None = None,
 ) -> DeliveryReport:
     """Build, render the complete deck, inspect every page, repair source/IR, and repeat."""
     policy = policy or DeliveryPolicy()
@@ -210,7 +216,10 @@ def run_repair_loop(
         final_pptx = Path(build(iteration, repair_requests))
         page_gate, critic_gate, visual_gate = validate_delivery(
             final_pptx, workspace / f"iteration-{iteration}",
-            reference_pptx=reference_pptx, policy=policy, critic=critic,
+            reference_pptx=reference_pptx,
+            policy=policy,
+            critic=critic,
+            visual_review_reason=visual_review_reason,
         )
         repair_requests = _repair_requests(page_gate, critic_gate, visual_gate)
         passed = page_gate.passed and critic_gate.passed and (visual_gate is None or visual_gate.passed)

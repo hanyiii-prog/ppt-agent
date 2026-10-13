@@ -127,6 +127,32 @@ have run image checks. It runs the structural geometry gate and says so:
 `"mode": "rendered"` with an empty `degraded` list means the full page, critic and visual-regression
 gates ran.
 
+### Model-assisted visual review
+
+`ppt_agent_generate` can ask the host model to inspect rendered slide images. A host must explicitly
+declare image support in its `initialize` capabilities:
+
+```json
+{
+  "capabilities": {
+    "sampling": {},
+    "experimental": {"ppt-agent": {"samplingVision": true}}
+  }
+}
+```
+
+The declaration means the host will route image-bearing sampling requests to a vision-capable model.
+If the capability is absent or false, the Agent will not send screenshots; it runs deterministic
+checks instead and reports that aesthetic and visual-expression review was not available. If a
+declared visual request fails or returns an invalid review, the Agent also falls back to deterministic
+checks. When no rasteriser is available, the report makes clear that only structural checks ran.
+
+This remains a compatibility path for hosts that expose MCP sampling. Sampling was deprecated in
+the MCP `2026-07-28` protocol revision and remains available during its deprecation window; new
+model integrations should add a direct provider adapter rather than deepen reliance on host sampling.
+The visual critic consumes the provider chat interface, so its review logic can stay independent of
+that transport. See the [MCP deprecation proposal](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/seps/2577-deprecate-roots-sampling-and-logging.md).
+
 ## Testing the server by hand
 
 ```bash
