@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .evidence_graph import EvidenceGraph
+from .editability import validate_presentation_editability
 from .ir import Presentation
 from .source_pack import SourcePack
 
@@ -52,6 +53,7 @@ def evaluate_deck(
         if not str(slide.claim or "").strip()
     ]
     page_total_ok = len(presentation.slides) == len(outline_slides)
+    editability = validate_presentation_editability(presentation)
     passed = (
         not missing
         and not unknown
@@ -59,6 +61,7 @@ def evaluate_deck(
         and not empty_slides
         and not empty_titles
         and page_total_ok
+        and editability["passed"]
     )
 
     visual = visual_report or {
@@ -85,6 +88,7 @@ def evaluate_deck(
             "empty_slides": empty_slides,
             "empty_titles": empty_titles,
         },
+        "editability": editability,
         "visual_quality": visual,
         "planning_mode": planning_mode,
     }

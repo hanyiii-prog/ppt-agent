@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from .clone_shell import CloneShell, ShellExhausted, audit_pages
+from .editability import validate_page_plan_editability
 
 
 class CloneBuildError(ValueError):
@@ -562,6 +563,10 @@ def render_clone_deck(
         raise CloneBuildError("'pages' must be a non-empty array of page specs")
     for spec in pages:
         _role_of(spec)                       # validate before opening the template
+    try:
+        validate_page_plan_editability(pages)
+    except ValueError as exc:
+        raise CloneBuildError(str(exc)) from None
 
     deck = CloneShell(str(template))
     warnings: list[str] = []

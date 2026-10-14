@@ -19,6 +19,8 @@
 
 V3.0.0 引入 `build-v3` 溯源优先生成链路。它先建立 SourcePack、EvidenceGraph、DeckBrief、Outline、TemplateProfile 和 PageDesignIR，再编译为 PPTX / HTML；输出会保留每个中间契约文件，质量报告说明来源覆盖率、页数一致性和视觉审查是否运行。没有配置模型时自动走保守规则规划；配置模型后，模型规划结果仍要经过本地校验和补齐。
 
+交付硬规则：所有页面内容必须保持原生可编辑，标题、正文、列表、表格、图表和装饰都不能用模板/参考文件截图替代。图片类资料只作为溯源参考；用户模板中原本继承的 Logo、背景等原生媒体可以保留，但每页仍必须有原生可编辑内容，最终报告会输出 `editability` 检查结果。
+
 ```bash
 # 不依赖模型，先跑通规则规划链路
 ppt-agent build-v3 source.md -o workspace --objective "project progress report" --max-pages 8
@@ -537,6 +539,12 @@ page plan → one shell per spec, dispatched to the page kits, audited) and
 byte-identical-template route without writing Python.
 
 V3.0.0 adds the `build-v3` provenance-first pipeline: SourcePack → EvidenceGraph → DeckBrief → Outline → TemplateProfile → PageDesignIR → PPTX/HTML, with every contract artifact written to disk and a quality report that discloses source coverage, page consistency and whether visual review actually ran. Rule planning works without a model; model planning remains locally validated.
+
+Delivery also enforces a hard editability rule: titles, body text, lists, tables, charts and
+decorations stay native and editable. Screenshots from templates or references may not stand in for
+slide content. Image sources remain reference-only; native template media inherited through a shell
+can remain, but every page must still expose native editable content, and the final report includes
+an `editability` gate.
 
 The same V3 stages are exposed through the SDK, CLI (`analyze-sources`, `plan-outline`,
 `validate-outline`, `author-slides`, `select-template`, `compile-page-design`, `evaluate-deck`)

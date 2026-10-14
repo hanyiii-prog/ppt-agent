@@ -30,6 +30,7 @@ def build_final_report(
         "planning": planning_report,
         "content_quality": quality.get("content_quality", {}),
         "structural_quality": quality.get("structural_quality", {}),
+        "editability": quality.get("editability", {}),
         "visual_quality": quality.get("visual_quality", {}),
         "render": quality.get("render", {}),
         "degradations": degradations or [],

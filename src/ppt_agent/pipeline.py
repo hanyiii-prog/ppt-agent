@@ -8,6 +8,7 @@ from .composition_compiler import compile_presentation
 from .content_relations import build_content_relations
 from .deck_brief import DeckBrief
 from .deck_evaluator import evaluate_deck
+from .editability import audit_pptx_editability
 from .evidence_graph import build_evidence_graph
 from .ir import Presentation
 from .outline_planner import plan_outline, validate_outline_with_model
@@ -99,11 +100,13 @@ def run_v3_pipeline(
             critic=visual_critic,
             visual_review_reason=visual_review_reason,
         )
+        saved_deck_editability = audit_pptx_editability(final_pptx_path)
         template_passed = bool(
             (user_template_result.get("audit") or {}).get("count") == 0
             and (user_template_result.get("fidelity") or {}).get("passed")
             and page_gate.passed
             and critic_gate.passed
+            and saved_deck_editability["passed"]
             and (visual_gate is None or visual_gate.passed)
         )
         delivery = {
@@ -115,12 +118,14 @@ def run_v3_pipeline(
                 "page_gate_passed": page_gate.passed,
                 "critic_gate_passed": critic_gate.passed,
                 "visual_gate_passed": visual_gate.passed if visual_gate else None,
+                "editability_passed": saved_deck_editability["passed"],
                 "repair_requests": [],
                 "template_route": template_route,
             }],
             "page_gate": page_gate.to_dict(),
             "critic_gate": critic_gate.to_dict(),
             "visual_gate": visual_gate.to_dict() if visual_gate else None,
+            "editability": saved_deck_editability,
         }
         _write_json(out / "quality" / "user-template" / "delivery-report.json", delivery)
         quality_extra = {
@@ -128,6 +133,7 @@ def run_v3_pipeline(
             "clone_audit": user_template_result.get("audit"),
             "clone_fidelity": user_template_result.get("fidelity"),
             "structural_qc": user_template_result.get("structural_qc"),
+            "saved_deck_editability": saved_deck_editability,
         }
     else:
         delivery = repair_and_rebuild(
@@ -160,6 +166,9 @@ def run_v3_pipeline(
         visual_report=delivery.get("critic_gate"),
     )
     quality.update(quality_extra)
+    quality["editability"] = audit_pptx_editability(final_pptx_path)
+    if not quality["editability"]["passed"]:
+        delivery["passed"] = False
     quality["visual_quality"].setdefault("model_review", (
         "used" if (delivery.get("critic_gate") or {}).get("mode") == "model" else "unavailable"
     ))

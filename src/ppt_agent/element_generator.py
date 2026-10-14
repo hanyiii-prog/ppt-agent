@@ -23,6 +23,7 @@ import json
 import re
 from typing import Any, Callable
 
+from .editability import PROHIBITED_IMAGE_TYPES
 from . import element_store
 
 
@@ -163,10 +164,10 @@ def _build_table(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_image(spec: dict[str, Any]) -> dict[str, Any]:
-    path = str(spec.get("image_path") or "").strip()
-    if not path:
-        raise ValueError("image requires image_path")
-    return {"type": "image", "image_path": path, "text": None}
+    raise ValueError(
+        "image elements are not editable slide content; use native text, "
+        "table, shape, or chart data instead"
+    )
 
 
 def _build_metric(spec: dict[str, Any]) -> dict[str, Any]:
@@ -201,6 +202,8 @@ def _llm_build(spec: dict[str, Any], llm_fn: Callable[[str], str]) -> dict[str, 
     parsed = json.loads(cleaned)
     if not isinstance(parsed, dict) or not parsed.get("type"):
         raise ValueError("LLM returned invalid element JSON")
+    if str(parsed.get("type") or "").lower() in PROHIBITED_IMAGE_TYPES:
+        raise ValueError("LLM returned non-editable image content")
     return parsed
 
 
@@ -211,4 +214,6 @@ def _estimate_tokens(spec: dict[str, Any]) -> int:
 
 def _placeholder(spec: dict[str, Any], element_type: str) -> dict[str, Any]:
     text = str(spec.get("text") or spec.get("label") or "")
+    if element_type.lower() in PROHIBITED_IMAGE_TYPES:
+        element_type = "body"
     return {"type": element_type, "text": text, "font_pt": 14.0, "_placeholder": True}

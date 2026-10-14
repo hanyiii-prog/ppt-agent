@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 from pathlib import Path
 from typing import Any
 
@@ -192,14 +191,15 @@ def _add_placeholder(slide: Any, box: tuple[Any, Any, Any, Any], label: str) -> 
 
 
 def _render_image(slide: Any, comp: Component, box: tuple[Any, Any, Any, Any]) -> Any:
+    """Keep image requests out of PPTX as raster content.
+
+    The editability policy requires text, tables, charts and supporting
+    graphics to be edited natively.  An unrenderable image request therefore
+    remains an editable placeholder instead of becoming a slide picture.
+    """
     data = comp.data if isinstance(comp.data, dict) else {}
-    path = data.get("path") if isinstance(data.get("path"), str) else None
-    if path and Path(path).exists():
-        return slide.shapes.add_picture(str(path), *box)
-    blob = data.get("bytes") or data.get("image") or data.get("blob")
-    if isinstance(blob, (bytes, bytearray)):
-        return slide.shapes.add_picture(io.BytesIO(bytes(blob)), *box)
-    return _add_placeholder(slide, box, f"[image] {data.get('name') or comp.id or ''}".strip())
+    label = data.get("name") or comp.id or "image"
+    return _add_placeholder(slide, box, f"[image] {label}".strip())
 
 
 def _render_table(slide: Any, comp: Component, box: tuple[Any, Any, Any, Any]) -> Any:

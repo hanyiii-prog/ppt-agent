@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .evidence_graph import EvidenceGraph
+from .editability import PROHIBITED_IMAGE_TYPES
 from .ir import Component, Presentation, Provenance, Slide
 
 
@@ -13,6 +14,8 @@ def compile_presentation(
     slide_size: tuple[float, float] = (13.333, 7.5),
 ) -> Presentation:
     """Compile the Page Design IR into Universal Presentation IR."""
+    from .editability import validate_presentation_editability
+
     theme = design_ir.get("theme") or {}
     colors = theme.get("colors") or {}
     fonts = theme.get("fonts") or {}
@@ -21,7 +24,7 @@ def compile_presentation(
         compile_slide(page, colors, fonts, scale, evidence, slide_size=slide_size)
         for page in design_ir.get("pages") or []
     ]
-    return Presentation(
+    presentation = Presentation(
         version="0.1",
         title=str(design_ir.get("title") or "Presentation"),
         slides=slides,
@@ -30,6 +33,11 @@ def compile_presentation(
             **theme,
         },
     )
+    report = validate_presentation_editability(presentation)
+    if not report["passed"]:
+        issues = [issue for page in report["pages"] for issue in page["issues"]]
+        raise ValueError("; ".join(issues))
+    return presentation
 
 
 def compile_slide(
@@ -98,7 +106,13 @@ def compile_slide(
 
     for slot in slots.values():
         slot_id = str(slot.get("id") or "")
-        if str(slot.get("kind")) == "rect":
+        slot_kind = str(slot.get("kind") or "").lower()
+        if slot_kind in PROHIBITED_IMAGE_TYPES:
+            raise ValueError(
+                f"page {page['page_id']} slot {slot_id!r} is {slot_kind!r}; "
+                "generated slide content must be native and editable"
+            )
+        if slot_kind == "rect":
             component = rect(slot)
         elif slot_id == "table":
             component = _table_component(page, slot, evidence)
