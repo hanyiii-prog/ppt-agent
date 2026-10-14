@@ -10,6 +10,21 @@
 >
 > 像开发软件一样开发 PPT。
 
+## 📄 版权与许可 / License
+
+**Copyright (c) 2026 hanyiii-prog. All rights reserved.**
+
+本项目基于 **GNU Affero General Public License v3.0 (AGPL-3.0)** 开源发布。这意味着：
+
+- 个人和非商业用途可以自由使用、修改和分发。
+- 任何基于本项目的衍生作品（包括网络服务形式提供）必须同样以 AGPL-3.0 开源。
+- 未经版权人书面授权，不得将本项目或其衍生作品用于闭源商业产品。
+- 版权人保留双授权（dual licensing）权利：如需商业闭源授权，请联系作者。
+
+完整协议见 [LICENSE](LICENSE)。
+
+---
+
 ## 🌏 中文 / English
 
 - **中文文档：** 当前 README
