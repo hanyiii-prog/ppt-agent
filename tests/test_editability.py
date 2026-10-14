@@ -128,6 +128,24 @@ def test_builtin_pipeline_writes_an_editability_gate(tmp_path):
         assert page["native_editable_shape_count"] > 0
 
 
+def test_mcp_audit_editability_tool(tmp_path):
+    from ppt_agent.mcp.tools import ToolContext, tool_audit_editability
+    from ppt_agent.sdk import PptAgent
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    textbox = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    textbox.text_frame.text = "Editable"
+    deck = tmp_path / "ok.pptx"
+    prs.save(deck)
+
+    context = ToolContext(agent=PptAgent(), workspace=tmp_path)
+    report = tool_audit_editability({"pptx": "ok.pptx"}, context)
+    assert report["passed"]
+
+
+
+
 def test_renderer_does_not_insert_a_picture_for_an_image_component(tmp_path):
     payload = {
         "version": "1.0",

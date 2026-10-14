@@ -33,6 +33,7 @@ EXPECTED_TOOLS = {
     "ppt_agent_clone_plan",
     "ppt_agent_clone_build",
     "ppt_agent_clone_audit",
+    "ppt_agent_audit_editability",
     "ppt_agent_fidelity_extract",
     "ppt_agent_fidelity_diff",
     "ppt_agent_fidelity_repair",

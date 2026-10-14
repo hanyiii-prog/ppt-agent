@@ -403,6 +403,15 @@ def tool_clone_audit(arguments: dict[str, Any], context: ToolContext) -> dict[st
     return context.agent.clone_audit(deck)
 
 
+def tool_audit_editability(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..editability import audit_pptx_editability
+
+    deck = context.input_path(_string(arguments, "pptx"))
+    template = _optional_string(arguments, "template")
+    template_path = context.input_path(template) if template else None
+    return audit_pptx_editability(deck, template=str(template_path) if template_path else None)
+
+
 # --- fidelity engine (V1.11) ----------------------------------------------
 def tool_fidelity_extract(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
     from ..fidelity import extract_fidelity_dna
@@ -606,6 +615,7 @@ TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str
     "ppt_agent_clone_plan": tool_clone_plan,
     "ppt_agent_clone_build": tool_clone_build,
     "ppt_agent_clone_audit": tool_clone_audit,
+    "ppt_agent_audit_editability": tool_audit_editability,
     "ppt_agent_fidelity_extract": tool_fidelity_extract,
     "ppt_agent_fidelity_diff": tool_fidelity_diff,
     "ppt_agent_fidelity_repair": tool_fidelity_repair,
@@ -857,6 +867,23 @@ TOOL_SPECS: list[dict[str, Any]] = [
         ),
         "inputSchema": _schema(
             {"pptx": {"type": "string", "description": "Path to the deck to audit"}},
+            ["pptx"],
+        ),
+    },
+    {
+        "name": "ppt_agent_audit_editability",
+        "description": (
+            "Editability gate: verify that every page has native editable "
+            "text, table, chart or shape content and that no post-build "
+            "screenshot paste bypassed the editability rule. With a template "
+            "reference, slide-local pictures not present in the template are "
+            "flagged as violations."
+        ),
+        "inputSchema": _schema(
+            {
+                "pptx": {"type": "string", "description": "Path to the deck to audit"},
+                "template": {"type": "string", "description": "Optional template PPTX for picture hash allow-listing"},
+            },
             ["pptx"],
         ),
     },

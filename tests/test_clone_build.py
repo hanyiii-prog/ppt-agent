@@ -102,6 +102,14 @@ def test_render_clone_deck_without_audit(mini_template, tmp_path):
     assert out.exists()
 
 
+def test_render_clone_deck_includes_output_sha256(mini_template, tmp_path):
+    import hashlib
+
+    out = tmp_path / "out.pptx"
+    result = render_clone_deck(mini_template, _plan()[:1], out, audit=False, fidelity=False)
+    assert result["output_sha256"] == hashlib.sha256(out.read_bytes()).hexdigest()
+
+
 def test_header_only_content_page_warns(mini_template, tmp_path):
     out = tmp_path / "out.pptx"
     result = render_clone_deck(
@@ -186,7 +194,7 @@ def test_tool_names_include_clone_tools():
     names = tool_names()
     assert {"ppt_agent_clone_plan", "ppt_agent_clone_build",
             "ppt_agent_clone_audit"} <= set(names)
-    assert len(names) == 27  # 13 base + 4 fidelity + narrative + generate + 8 V3 stages
+    assert len(names) == 28  # 13 base + 4 fidelity + narrative + generate + 8 V3 stages + editability
 
 
 def test_clone_tools_round_trip(tmp_path):

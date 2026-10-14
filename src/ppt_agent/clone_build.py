@@ -43,6 +43,7 @@ silent ignore).
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -610,6 +611,7 @@ def render_clone_deck(
         "pages": len(pages),
         "shells": _demand(pages),
         "warnings": warnings,
+        "output_sha256": hashlib.sha256(Path(str(output)).read_bytes()).hexdigest(),
     }
     if audit:
         result["audit"] = audit_deck(output)
