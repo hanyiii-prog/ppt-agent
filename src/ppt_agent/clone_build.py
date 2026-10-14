@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from .clone_shell import CloneShell, ShellExhausted, audit_pages
+from .editability import audit_pptx_editability
 from .editability import validate_page_plan_editability
 
 
@@ -615,6 +616,10 @@ def render_clone_deck(
 
     # -- structural QC: empty text, duplicate titles, overflow estimation --
     result["structural_qc"] = _structural_qc(output)
+
+    # -- editability gate: catches any post-build modification that pasted
+    #    screenshots into slides, even if it happened outside this module --
+    result["editability"] = audit_pptx_editability(output, template=str(template))
 
     roles = [_role_of(spec) for spec in pages]
     if fidelity:

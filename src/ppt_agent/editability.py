@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import hashlib
 
 SCHEMA = "editability-report/v1"
 
@@ -26,12 +27,22 @@ _MEDIA_KEY_MARKERS = ("image", "picture", "screenshot", "snapshot", "photo")
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"}
 
 
-def audit_pptx_editability(pptx: str | Path) -> dict[str, Any]:
-    """Audit the saved deck without treating inherited media as content."""
+def audit_pptx_editability(
+    pptx: str | Path,
+    *,
+    template: str | Path | None = None,
+) -> dict[str, Any]:
+    """Audit the saved deck without treating template-inherited media as content.
+
+    When ``template`` is provided, slide-local picture hashes from the template
+    are used as an allow-list.  Any picture in the output whose hash is not in
+    the template is treated as a post-build paste and blocks the page.
+    """
     from pptx import Presentation
     from pptx.enum.shapes import MSO_SHAPE_TYPE
 
     prs = Presentation(str(pptx))
+    allowed_hashes = _template_picture_hashes(template) if template else None
     pages: list[dict[str, Any]] = []
     total_editable = total_pictures = 0
 
@@ -57,6 +68,19 @@ def audit_pptx_editability(pptx: str | Path) -> dict[str, Any]:
         if not text_shapes and not table_count and not chart_count:
             issues.append("page has no native editable text, table, or chart")
         issues.extend(_picture_label_issues(picture_shapes, index))
+        if allowed_hashes is not None:
+            for shape in picture_shapes:
+                try:
+                    pic_hash = hashlib.sha256(shape.image.blob).hexdigest()
+                except (AttributeError, Exception):
+                    continue
+                if pic_hash not in allowed_hashes:
+                    issues.append(
+                        f"page {index} picture {shape.shape_id} "
+                        f"({shape.name!r}) is not present in the template "
+                        "and appears to be a post-build screenshot paste; "
+                        "replace it with native editable content"
+                    )
 
         pages.append({
             "page": index,
@@ -169,6 +193,29 @@ def _picture_label_issues(pictures: list[Any], page: int) -> list[str]:
                 "screenshot/template/reference image; replace it with native content"
             )
     return issues
+
+
+def _template_picture_hashes(template: str | Path | None) -> set[str] | None:
+    """Collect sha256 hashes of all slide-local pictures in the template."""
+    if template is None:
+        return None
+    from pptx import Presentation as _Prs
+    from pptx.enum.shapes import MSO_SHAPE_TYPE as _MST
+
+    hashes: set[str] = set()
+    try:
+        t_prs = _Prs(str(template))
+    except Exception:
+        return set()
+    for slide in t_prs.slides:
+        for shape in slide.shapes:
+            if shape.shape_type != _MST.PICTURE:
+                continue
+            try:
+                hashes.add(hashlib.sha256(shape.image.blob).hexdigest())
+            except (AttributeError, Exception):
+                continue
+    return hashes
 
 
 def _check_editable_payload(value: Any, path: list[str]) -> None:

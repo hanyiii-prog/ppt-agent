@@ -1230,6 +1230,17 @@ def run_pipeline(
             audit_report = {"error": str(exc)}
             artifacts["clone_audit"] = audit_report
 
+    if artifacts.get("pptx"):
+        try:
+            from ..editability import audit_pptx_editability
+            editability_report = audit_pptx_editability(
+                Path(artifacts["pptx"]),
+                template=str(template_path) if template_path else None,
+            )
+            artifacts["editability"] = editability_report
+        except Exception as exc:
+            artifacts["editability"] = {"passed": False, "error": str(exc)}
+
     has_rasterizer = _detect_rasterizer()
 
     return {
