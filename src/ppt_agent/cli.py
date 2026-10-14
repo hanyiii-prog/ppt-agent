@@ -78,6 +78,35 @@ def build_parser() -> argparse.ArgumentParser:
     build_v3.add_argument("--max-pages", type=int)
     build_v3.add_argument("--template", help="Builtin template id")
 
+    def _stage_parser(name: str, help_text: str) -> argparse.ArgumentParser:
+        stage = sub.add_parser(name, help=help_text)
+        stage.add_argument("source", type=Path)
+        stage.add_argument("-o", "--output", type=Path)
+        stage.add_argument("--task", type=Path, help="JSON task brief")
+        stage.add_argument("--objective")
+        stage.add_argument("--audience")
+        stage.add_argument("--max-pages", type=int)
+        stage.add_argument("--template", help="Builtin template id or .pptx path")
+        return stage
+
+    _stage_parser("analyze-sources", "Extract SourcePack, EvidenceGraph and relations")
+    _stage_parser("plan-outline", "Create and validate a provenance-first outline")
+    validate_outline_cmd = _stage_parser("validate-outline", "Validate an existing V3 outline")
+    validate_outline_cmd.add_argument("--outline", type=Path, required=True)
+    _stage_parser("author-slides", "Create validated SlideSpecs")
+    _stage_parser("compile-page-design", "Compile SlideSpecs into Page Design IR")
+    evaluate_deck_cmd = _stage_parser("evaluate-deck", "Evaluate an outline against its source evidence")
+    evaluate_deck_cmd.add_argument("--outline", type=Path, required=True)
+    templates = sub.add_parser("list-builtin-templates", help="List the built-in template catalog")
+    templates.add_argument("-o", "--output", type=Path)
+    select_template = sub.add_parser("select-template", help="Select or resolve a V3 template profile")
+    select_template.add_argument("--task", type=Path)
+    select_template.add_argument("--objective")
+    select_template.add_argument("--audience")
+    select_template.add_argument("--max-pages", type=int)
+    select_template.add_argument("--template", help="Builtin template id or .pptx path")
+    select_template.add_argument("-o", "--output", type=Path)
+
     caps = sub.add_parser("capabilities", help="Print the contract, host capabilities and renderer inventory")
     caps.add_argument("--host", help="Host profile: codex, workbuddy, doubao, claude, chatgpt")
     caps.add_argument("--json", action="store_true", help="Emit raw JSON instead of a summary")
@@ -297,7 +326,17 @@ def main() -> int:
         return 0 if report["passed"] else 2
     if args.command == "build-v3":
         from .rebuild_pipeline import build_v3_deck
-        report = build_v3_deck(args.source, args.out_dir, task=_build_v3_task(args))
+        task = _build_v3_task(args)
+        template_path = args.template
+        if template_path and not str(template_path).lower().endswith(".pptx"):
+            task.setdefault("template", template_path)
+            template_path = None
+        report = build_v3_deck(
+            args.source,
+            args.out_dir,
+            task=task,
+            template_path=template_path,
+        )
         quality = report["quality"]
         print(f"status  : {report['status'].upper()}")
         print(f"pages   : {report['page_total']}")
@@ -309,6 +348,61 @@ def main() -> int:
         if quality["visual_quality"].get("warning"):
             print(f"warning : {quality['visual_quality']['warning']}")
         return 0 if report["status"] == "passed" else 2
+    if args.command in {
+        "analyze-sources", "plan-outline", "validate-outline", "author-slides",
+        "compile-page-design", "evaluate-deck", "list-builtin-templates",
+        "select-template",
+    }:
+        from .pipeline import (
+            analyze_sources,
+            author_slides_stage,
+            compile_page_design_stage,
+            evaluate_outline_stage,
+            list_builtin_templates,
+            plan_outline_stage,
+            select_template_stage,
+        )
+
+        def emit(payload: dict) -> int:
+            if getattr(args, "output", None):
+                _write_json(args.output, payload)
+                print(f"wrote {args.output}")
+            else:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            stage_pass = payload.get("passed")
+            if stage_pass is False:
+                return 2
+            return 0
+
+        if args.command == "list-builtin-templates":
+            return emit(list_builtin_templates())
+        if args.command == "select-template":
+            return emit(select_template_stage(_build_v3_task(args), template_path=args.template))
+        if args.command == "analyze-sources":
+            return emit(analyze_sources(args.source, task=_build_v3_task(args)))
+        if args.command == "plan-outline":
+            return emit(plan_outline_stage(args.source, task=_build_v3_task(args)))
+        if args.command == "validate-outline":
+            return emit(evaluate_outline_stage(
+                args.source, _read_json(args.outline), task=_build_v3_task(args)
+            ))
+        if args.command == "author-slides":
+            return emit(author_slides_stage(args.source, task=_build_v3_task(args)))
+        if args.command == "compile-page-design":
+            task = _build_v3_task(args)
+            template_path = args.template
+            if template_path and not str(template_path).lower().endswith(".pptx"):
+                task.setdefault("template", template_path)
+                template_path = None
+            return emit(compile_page_design_stage(
+                args.source,
+                task=task,
+                template_path=template_path,
+            ))
+        if args.command == "evaluate-deck":
+            return emit(evaluate_outline_stage(
+                args.source, _read_json(args.outline), task=_build_v3_task(args)
+            ))
     if args.command == "build":
         agent = _agent()
         facts = json.loads(args.facts.read_text(encoding="utf-8")) if args.facts else None

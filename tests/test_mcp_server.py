@@ -39,6 +39,14 @@ EXPECTED_TOOLS = {
     "ppt_agent_fidelity_validate",
     "ppt_agent_narrative_plan",
     "ppt_agent_generate",
+    "ppt_agent_analyze_sources",
+    "ppt_agent_plan_outline",
+    "ppt_agent_validate_outline",
+    "ppt_agent_author_slides",
+    "ppt_agent_list_builtin_templates",
+    "ppt_agent_select_template",
+    "ppt_agent_compile_page_design",
+    "ppt_agent_evaluate_deck",
 }
 
 

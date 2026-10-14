@@ -160,6 +160,104 @@ class PptAgent:
 
         return audit_deck(Path(pptx))
 
+    # --- V3 agent rebuild stages ------------------------------------------
+    def analyze_sources(
+        self,
+        source: str | Path | Sequence[str | Path],
+        *,
+        task: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from .pipeline import analyze_sources
+
+        return analyze_sources(source, task=task)
+
+    def plan_v3_outline(
+        self,
+        source: str | Path | Sequence[str | Path],
+        *,
+        task: dict[str, Any] | None = None,
+        llm_fn: Callable[[str], str] | None = None,
+    ) -> dict[str, Any]:
+        from .pipeline import plan_outline_stage
+
+        return plan_outline_stage(source, task=task, llm_fn=llm_fn)
+
+    def author_v3_slides(
+        self,
+        source: str | Path | Sequence[str | Path],
+        *,
+        task: dict[str, Any] | None = None,
+        llm_fn: Callable[[str], str] | None = None,
+    ) -> dict[str, Any]:
+        from .pipeline import author_slides_stage
+
+        return author_slides_stage(source, task=task, llm_fn=llm_fn)
+
+    def list_builtin_templates(self) -> dict[str, Any]:
+        from .pipeline import list_builtin_templates
+
+        return list_builtin_templates()
+
+    def select_v3_template(
+        self,
+        task: dict[str, Any] | None = None,
+        *,
+        template_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        from .pipeline import select_template_stage
+
+        return select_template_stage(task, template_path=template_path)
+
+    def compile_v3_page_design(
+        self,
+        source: str | Path | Sequence[str | Path],
+        *,
+        task: dict[str, Any] | None = None,
+        llm_fn: Callable[[str], str] | None = None,
+        template_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        from .pipeline import compile_page_design_stage
+
+        return compile_page_design_stage(
+            source, task=task, llm_fn=llm_fn, template_path=template_path
+        )
+
+    def evaluate_v3_outline(
+        self,
+        source: str | Path | Sequence[str | Path],
+        outline: dict[str, Any] | Any,
+        *,
+        task: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from .pipeline import evaluate_outline_stage
+
+        return evaluate_outline_stage(source, outline, task=task)
+
+    def build_v3(
+        self,
+        source: str | Path,
+        *,
+        out_dir: str | Path,
+        task: dict[str, Any] | None = None,
+        llm_fn: Callable[[str], str] | None = None,
+        visual_critic: Any | None = None,
+        visual_review_reason: str | None = None,
+        max_repair_iterations: int = 3,
+        template_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        from .pipeline import run_v3_pipeline
+
+        return run_v3_pipeline(
+            source,
+            out_dir,
+            task=task,
+            llm_fn=llm_fn,
+            visual_critic=visual_critic,
+            visual_review_reason=visual_review_reason,
+            max_repair_iterations=max_repair_iterations,
+            template_path=template_path,
+        )
+
     # --- IR io ------------------------------------------------------------
     def load_ir(self, path: str | Path) -> Presentation:
         import json

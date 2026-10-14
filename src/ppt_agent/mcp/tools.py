@@ -247,6 +247,134 @@ def tool_host_profile(arguments: dict[str, Any], context: ToolContext) -> dict[s
     }
 
 
+def _v3_sources(arguments: dict[str, Any], context: ToolContext) -> list[Path]:
+    if isinstance(arguments.get("sources"), list):
+        return [context.input_path(str(item)) for item in arguments["sources"]]
+    return [context.input_path(_string(arguments, "source"))]
+
+
+def _v3_task(arguments: dict[str, Any]) -> dict[str, Any]:
+    task = arguments.get("task")
+    if task is not None and not isinstance(task, dict):
+        raise ToolError("'task' must be an object")
+    return task or {}
+
+
+def _v3_outline(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    path = context.input_path(_string(arguments, "outline_path"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ToolError("outline JSON must be an object")
+    return payload
+
+
+def _stage_output(payload: dict[str, Any], arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    output = _optional_string(arguments, "output")
+    if not output:
+        return payload
+    target = context.output_path(output)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {**payload, "output_path": str(target)}
+
+
+def tool_analyze_sources(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..pipeline import analyze_sources
+
+    return _stage_output(
+        analyze_sources(_v3_sources(arguments, context), task=_v3_task(arguments)),
+        arguments,
+        context,
+    )
+
+
+def tool_plan_outline(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..pipeline import plan_outline_stage
+
+    return _stage_output(
+        plan_outline_stage(_v3_sources(arguments, context), task=_v3_task(arguments)),
+        arguments,
+        context,
+    )
+
+
+def tool_validate_outline(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..pipeline import evaluate_outline_stage
+
+    return _stage_output(
+        evaluate_outline_stage(
+            _v3_sources(arguments, context),
+            _v3_outline(arguments, context),
+            task=_v3_task(arguments),
+        ),
+        arguments,
+        context,
+    )
+
+
+def tool_author_slides(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..pipeline import author_slides_stage
+
+    return _stage_output(
+        author_slides_stage(_v3_sources(arguments, context), task=_v3_task(arguments)),
+        arguments,
+        context,
+    )
+
+
+def tool_list_builtin_templates(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..pipeline import list_builtin_templates
+
+    return _stage_output(list_builtin_templates(), arguments, context)
+
+
+def tool_select_template(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..pipeline import select_template_stage
+
+    template = _optional_string(arguments, "template")
+    template_path = context.input_path(template) if template and template.lower().endswith(".pptx") else None
+    task = _v3_task(arguments)
+    if template and not template.lower().endswith(".pptx"):
+        task.setdefault("template", template)
+    return _stage_output(
+        select_template_stage(task, template_path=template_path),
+        arguments,
+        context,
+    )
+
+
+def tool_compile_page_design(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..pipeline import compile_page_design_stage
+
+    template = _optional_string(arguments, "template")
+    template_path = context.input_path(template) if template and template.lower().endswith(".pptx") else None
+    task = _v3_task(arguments)
+    if template and not template.lower().endswith(".pptx"):
+        task.setdefault("template", template)
+    return _stage_output(
+        compile_page_design_stage(
+            _v3_sources(arguments, context),
+            task=task,
+            template_path=template_path,
+        ),
+        arguments,
+        context,
+    )
+
+
+def tool_evaluate_deck(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    from ..pipeline import evaluate_outline_stage
+
+    return _stage_output(
+        evaluate_outline_stage(
+            _v3_sources(arguments, context),
+            _v3_outline(arguments, context),
+            task=_v3_task(arguments),
+        ),
+        arguments,
+        context,
+    )
+
+
 def _page_specs(arguments: dict[str, Any]) -> list[dict[str, Any]]:
     pages = arguments.get("pages")
     if not isinstance(pages, list) or not pages:
@@ -484,6 +612,14 @@ TOOL_IMPLEMENTATIONS: dict[str, Callable[[dict[str, Any], ToolContext], dict[str
     "ppt_agent_fidelity_validate": tool_fidelity_validate,
     "ppt_agent_narrative_plan": tool_narrative_plan,
     "ppt_agent_generate": tool_generate,
+    "ppt_agent_analyze_sources": tool_analyze_sources,
+    "ppt_agent_plan_outline": tool_plan_outline,
+    "ppt_agent_validate_outline": tool_validate_outline,
+    "ppt_agent_author_slides": tool_author_slides,
+    "ppt_agent_list_builtin_templates": tool_list_builtin_templates,
+    "ppt_agent_select_template": tool_select_template,
+    "ppt_agent_compile_page_design": tool_compile_page_design,
+    "ppt_agent_evaluate_deck": tool_evaluate_deck,
 }
 
 
@@ -542,6 +678,22 @@ _PROP_CLONE_PAGES = {
         "additionalProperties": True,
     },
 }
+
+_PROP_V3_TASK = {
+    "type": "object",
+    "description": "Audience, objective, tone, page budget, template preference and constraints",
+}
+_PROP_V3_SOURCE = {"type": "string", "description": "Path to a supported source file"}
+_PROP_V3_SOURCES = {
+    "type": "array",
+    "description": "Paths to Markdown, DOCX, PPTX, PDF, HTML or image sources",
+    "items": {"type": "string"},
+}
+_PROP_V3_TEMPLATE = {
+    "type": "string",
+    "description": "Built-in template id or path to a user .pptx template",
+}
+_PROP_V3_OUTLINE_PATH = {"type": "string", "description": "Path to outline JSON"}
 
 TOOL_SPECS: list[dict[str, Any]] = [
     {
@@ -824,6 +976,83 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 },
             },
         ),
+    },
+    {
+        "name": "ppt_agent_analyze_sources",
+        "description": "V3 stage 1: ingest multiple sources into SourcePack, EvidenceGraph and ContentRelations.",
+        "inputSchema": _schema({
+            "source": _PROP_V3_SOURCE,
+            "sources": _PROP_V3_SOURCES,
+            "task": _PROP_V3_TASK,
+            "output": {"type": "string"},
+        }),
+    },
+    {
+        "name": "ppt_agent_plan_outline",
+        "description": "V3 stage 2: create and validate a provenance-first outline.",
+        "inputSchema": _schema({
+            "source": _PROP_V3_SOURCE,
+            "sources": _PROP_V3_SOURCES,
+            "task": _PROP_V3_TASK,
+            "output": {"type": "string"},
+        }),
+    },
+    {
+        "name": "ppt_agent_validate_outline",
+        "description": "V3 stage 3: validate page purposes, evidence IDs, source coverage and page budget.",
+        "inputSchema": _schema({
+            "source": _PROP_V3_SOURCE,
+            "sources": _PROP_V3_SOURCES,
+            "outline_path": _PROP_V3_OUTLINE_PATH,
+            "task": _PROP_V3_TASK,
+            "output": {"type": "string"},
+        }, ["outline_path"]),
+    },
+    {
+        "name": "ppt_agent_author_slides",
+        "description": "V3 stage 4: turn an outline into SlideSpec contracts with traceable evidence.",
+        "inputSchema": _schema({
+            "source": _PROP_V3_SOURCE,
+            "sources": _PROP_V3_SOURCES,
+            "task": _PROP_V3_TASK,
+            "output": {"type": "string"},
+        }),
+    },
+    {
+        "name": "ppt_agent_list_builtin_templates",
+        "description": "List the built-in, self-owned template catalog.",
+        "inputSchema": _schema({"output": {"type": "string"}}),
+    },
+    {
+        "name": "ppt_agent_select_template",
+        "description": "Resolve a user PPTX template or score and select a built-in template profile.",
+        "inputSchema": _schema({
+            "task": _PROP_V3_TASK,
+            "template": _PROP_V3_TEMPLATE,
+            "output": {"type": "string"},
+        }),
+    },
+    {
+        "name": "ppt_agent_compile_page_design",
+        "description": "V3 stage 5: compile validated SlideSpecs and a resolved template into Page Design IR.",
+        "inputSchema": _schema({
+            "source": _PROP_V3_SOURCE,
+            "sources": _PROP_V3_SOURCES,
+            "task": _PROP_V3_TASK,
+            "template": _PROP_V3_TEMPLATE,
+            "output": {"type": "string"},
+        }),
+    },
+    {
+        "name": "ppt_agent_evaluate_deck",
+        "description": "Evaluate an outline and deck evidence against source provenance and page budget.",
+        "inputSchema": _schema({
+            "source": _PROP_V3_SOURCE,
+            "sources": _PROP_V3_SOURCES,
+            "outline_path": _PROP_V3_OUTLINE_PATH,
+            "task": _PROP_V3_TASK,
+            "output": {"type": "string"},
+        }, ["outline_path"]),
     },
 ]
 

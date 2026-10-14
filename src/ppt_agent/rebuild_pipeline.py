@@ -617,74 +617,50 @@ def build_v3_deck(
     *,
     llm_fn: Callable[[str], str] | None = None,
     task: dict[str, Any] | None = None,
+    template_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Build a versioned V3 deck and write every intermediate stage."""
-    out = Path(output)
-    out.mkdir(parents=True, exist_ok=True)
-    brief = DeckBrief.from_task(task or {})
-    document, pack = build_source_pack(source)
-    evidence = build_evidence_graph(document, pack)
-    planning_mode = "rules"
-    planning_report: dict[str, Any] = {"mode": "rules", "error": None}
-    if llm_fn is not None:
-        analyzed = analyze_content(document)
-        outline, planning_report = _model_outline(document, analyzed, brief, llm_fn)
-        planning_mode = planning_report["mode"]
-    else:
-        outline = _rule_outline(document, pack, brief)
-    _validate_outline(outline, pack, brief)
-    template = select_template(brief)
-    design_ir = build_page_design_ir(outline, template, document)
-    design_ir["title"] = outline.title
-    presentation = compile_presentation(design_ir, evidence)
+    """Compatibility facade for the modular V3 pipeline."""
+    from .pipeline import run_v3_pipeline
 
-    pptx_path = out / "deck.pptx"
-    try:
-        from .renderers import render_with
-        render_result = render_with(presentation, pptx_path)
-        render_error = None
-    except Exception as exc:  # noqa: BLE001 -- report renderer failures honestly
-        render_result = None
-        render_error = f"{type(exc).__name__}: {exc}"
-    html_path = out / "deck.html"
-    try:
-        from .renderers import render_with
-        render_with(presentation, html_path, renderer="html")
-        html_error = None
-    except Exception as exc:  # noqa: BLE001 -- HTML is optional evidence
-        html_error = f"{type(exc).__name__}: {exc}"
-    artifacts = {"pptx": str(pptx_path), "html": str(html_path)}
-    quality = evaluate_deck(presentation, outline, pack, evidence, artifacts, planning_mode)
-    quality["render"] = {
-        "pptx_written": pptx_path.is_file(),
-        "html_written": html_path.is_file(),
-        "error": render_error or html_error,
+    modular_report = run_v3_pipeline(
+        source,
+        output,
+        task=task,
+        llm_fn=llm_fn,
+        template_path=template_path,
+    )
+    planning_report = {
+        "mode": modular_report.get("planning", {}).get("mode", "rules"),
+        "error": None,
+        "outline_review": modular_report.get("planning", {}).get("outline_review"),
     }
-    if render_error:
-        quality["status"] = "failed"
-    report = {
+    workspace = Path(output)
+    outline_data = json.loads((workspace / "outline.json").read_text(encoding="utf-8"))
+    template_profile = json.loads((workspace / "template-profile.json").read_text(encoding="utf-8"))
+    quality = {
+        "content_quality": modular_report.get("content_quality", {}),
+        "structural_quality": modular_report.get("structural_quality", {}),
+        "visual_quality": modular_report.get("visual_quality", {}),
+        "render": modular_report.get("render", {}),
+        "status": modular_report.get("status", "failed"),
+    }
+    if quality["visual_quality"].get("model_review") != "used":
+        quality["visual_quality"]["model_review"] = "not_run"
+    return {
         "schema": REPORT_SCHEMA,
-        "status": quality["status"],
-        "title": outline.title,
-        "page_total": len(presentation.slides),
-        "brief": brief.to_dict(),
+        "status": modular_report["status"],
+        "title": outline_data.get("title", "Presentation"),
+        "page_total": modular_report.get("page_total", 0),
+        "brief": json.loads((Path(output) / "deck-brief.json").read_text(encoding="utf-8")),
         "planning": planning_report,
         "template": {
-            "id": template["id"], "source": template["source_kind"],
-            "selection": template["selection"],
+            "id": modular_report.get("template", {}).get("id"),
+            "source": template_profile.get("source_kind"),
+            "selection": template_profile.get("selection"),
         },
         "quality": quality,
-        "artifacts": artifacts,
+        "artifacts": modular_report.get("artifacts", {}),
     }
-    _write_json(out / "source-pack.json", pack.to_dict())
-    _write_json(out / "evidence-graph.json", evidence.to_dict())
-    _write_json(out / "deck-brief.json", brief.to_dict())
-    _write_json(out / "outline.json", outline.to_dict())
-    _write_json(out / "template-profile.json", template)
-    _write_json(out / "page-design-ir.json", design_ir)
-    _write_json(out / "quality" / "final-report.json", quality)
-    _write_json(out / "final-report.json", report)
-    return report
 
 
 def _validate_outline(outline: Outline, pack: SourcePack, brief: DeckBrief) -> None:

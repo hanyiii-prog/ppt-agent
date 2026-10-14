@@ -186,7 +186,7 @@ def test_tool_names_include_clone_tools():
     names = tool_names()
     assert {"ppt_agent_clone_plan", "ppt_agent_clone_build",
             "ppt_agent_clone_audit"} <= set(names)
-    assert len(names) == 19  # 13 base + 4 fidelity + narrative + generate (V2.1)
+    assert len(names) == 27  # 13 base + 4 fidelity + narrative + generate + 8 V3 stages
 
 
 def test_clone_tools_round_trip(tmp_path):

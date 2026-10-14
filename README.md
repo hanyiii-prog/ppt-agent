@@ -25,6 +25,16 @@ ppt-agent build-v3 source.md -o workspace --objective "project progress report" 
 
 # 使用内置模板 ID
 ppt-agent build-v3 source.md -o workspace --template project-progress
+
+# 优先继承用户模板的真实壳层、装饰与主题
+ppt-agent build-v3 source.md -o workspace --template ./brand.pptx
+
+# 也可以单独调用阶段工具
+ppt-agent analyze-sources source.md -o source-analysis.json
+ppt-agent plan-outline source.md -o outline.json
+ppt-agent author-slides source.md -o slide-specs.json
+ppt-agent compile-page-design source.md --template project-progress -o page-design.json
+ppt-agent list-builtin-templates -o template-catalog.json
 ```
 
 Python API：
@@ -33,6 +43,14 @@ Python API：
 from ppt_agent import build_v3_deck
 
 report = build_v3_deck("source.md", "workspace", task={"max_pages": 8})
+
+# 需要逐阶段检查时，直接使用 SDK
+from ppt_agent.sdk import PptAgent
+
+agent = PptAgent()
+analysis = agent.analyze_sources("source.md", task={"objective": "季度汇报"})
+outline = agent.plan_v3_outline("source.md", task={"max_pages": 8})
+report = agent.build_v3("source.md", out_dir="workspace", task={"max_pages": 8})
 ```
 
 V2.0.0 建成 **Fidelity Engine 高保真闭环**——不再满足于“结构相似”，而是把“成品像不像参考”变成可验证、可迭代的工程闭环：
@@ -519,6 +537,11 @@ page plan → one shell per spec, dispatched to the page kits, audited) and
 byte-identical-template route without writing Python.
 
 V3.0.0 adds the `build-v3` provenance-first pipeline: SourcePack → EvidenceGraph → DeckBrief → Outline → TemplateProfile → PageDesignIR → PPTX/HTML, with every contract artifact written to disk and a quality report that discloses source coverage, page consistency and whether visual review actually ran. Rule planning works without a model; model planning remains locally validated.
+
+The same V3 stages are exposed through the SDK, CLI (`analyze-sources`, `plan-outline`,
+`validate-outline`, `author-slides`, `select-template`, `compile-page-design`, `evaluate-deck`)
+and MCP. A user `.pptx` supplied to `build-v3 --template` takes priority and is rendered through
+the CloneShell route, so the real template chrome is inherited rather than approximated by colour.
 
 V2.0.0 (Fidelity Engine GA, formerly `v1.11-fidelity-engine`) builds the **Fidelity Engine closed loop** — a verifiable,
 iterative pipeline that compares the generated deck against the reference at both structure and
