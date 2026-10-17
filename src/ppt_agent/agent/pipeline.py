@@ -79,7 +79,17 @@ def _component_matches_for_report(document) -> dict:
         return {"schema": "component-match/v1", "components": [], "matches": [], "unmatched": []}
 
 
-def _blocking_repair_requests(gate_report: dict[str, Any]) -> list[dict[str, Any]]:
+WARNING_FIX_RULES = frozenset({
+    "crowded", "text_too_small", "overlap", "hierarchy", "image_text_mismatch",
+})
+MAX_VISUAL_ITERATIONS = 5
+
+
+def _blocking_repair_requests(
+    gate_report: dict[str, Any],
+    *,
+    include_warnings: bool = False,
+) -> list[dict[str, Any]]:
     """Reduce gate output to page-scoped blocking findings for the planner."""
     requests: list[dict[str, Any]] = []
     page_gate = gate_report.get("page_gate") or {}
@@ -96,15 +106,27 @@ def _blocking_repair_requests(gate_report: dict[str, Any]) -> list[dict[str, Any
 
     critic_gate = gate_report.get("critic_gate") or {}
     for finding in critic_gate.get("findings") or []:
-        if not isinstance(finding, dict) or finding.get("severity") != "error":
+        if not isinstance(finding, dict):
             continue
-        requests.append({
-            "page": finding.get("page"),
-            "kind": "visual_critic",
-            "severity": finding.get("severity"),
-            "rule": finding.get("rule"),
-            "message": finding.get("message"),
-        })
+        severity = finding.get("severity")
+        rule = finding.get("rule") or ""
+        if severity == "error":
+            requests.append({
+                "page": finding.get("page"),
+                "kind": "visual_critic",
+                "severity": severity,
+                "rule": rule,
+                "message": finding.get("message"),
+            })
+        elif include_warnings and severity == "warning" and rule in WARNING_FIX_RULES:
+            requests.append({
+                "page": finding.get("page"),
+                "kind": "visual_critic",
+                "severity": severity,
+                "rule": rule,
+                "message": finding.get("message"),
+                "suggested_change": finding.get("suggested_change"),
+            })
 
     visual_gate = gate_report.get("visual_gate") or {}
     for page in visual_gate.get("pages") or []:
@@ -121,7 +143,89 @@ def _blocking_repair_requests(gate_report: dict[str, Any]) -> list[dict[str, Any
                     "mismatch_ratio": page.get("mismatch_ratio"),
                 },
             })
+
+    deck_gate = gate_report.get("deck_gate") or {}
+    for finding in deck_gate.get("findings") or []:
+        if not isinstance(finding, dict) or finding.get("severity") != "error":
+            continue
+        requests.append({
+            "page": finding.get("page"),
+            "kind": "deck_rhythm",
+            "severity": finding.get("severity"),
+            "rule": finding.get("rule"),
+            "message": finding.get("message"),
+            "suggested_change": finding.get("suggested_change"),
+        })
     return requests
+
+
+def _finding_count(gate_report: dict[str, Any]) -> int:
+    """Total actionable findings across all gates (errors + fixable warnings)."""
+    count = 0
+    page_gate = gate_report.get("page_gate") or {}
+    count += sum(1 for p in (page_gate.get("pages") or []) if isinstance(p, dict) and p.get("passed") is False)
+    critic_gate = gate_report.get("critic_gate") or {}
+    count += sum(1 for f in (critic_gate.get("findings") or [])
+                 if isinstance(f, dict) and (f.get("severity") == "error" or
+                     (f.get("severity") == "warning" and f.get("rule") in WARNING_FIX_RULES)))
+    visual_gate = gate_report.get("visual_gate") or {}
+    count += sum(1 for p in (visual_gate.get("pages") or []) if isinstance(p, dict) and p.get("passed") is False)
+    deck_gate = gate_report.get("deck_gate") or {}
+    count += sum(1 for f in (deck_gate.get("findings") or [])
+                 if isinstance(f, dict) and f.get("severity") == "error")
+    return count
+
+
+def _convergence_check(
+    previous_count: int,
+    current_count: int,
+    previous_ssim: float | None,
+    current_ssim: float | None,
+) -> str | None:
+    """Return a stop-reason string when convergence criteria are met, else None."""
+    if current_count >= previous_count and previous_count > 0:
+        return "no_improvement"
+    if previous_ssim is not None and current_ssim is not None:
+        if abs(current_ssim - previous_ssim) < 0.002 and current_count > 0:
+            return "converged"
+    return None
+
+
+def _run_deck_gate(
+    gate_report: dict[str, Any],
+    out: Path,
+    agent: Any,
+    visual_critic: Any,
+) -> None:
+    """Compose a contact sheet and run deck-rhythm review, then augment the gate report."""
+    deck_gate: dict[str, Any] = {"status": "skipped", "findings": [], "warning": None}
+    rendered_dir = out / "qa" / "rendered"
+    rendered_pages = sorted(rendered_dir.glob("slide-*.png"))
+    if not rendered_pages:
+        deck_gate["status"] = "no_rendered_pages"
+    elif visual_critic is None or not hasattr(visual_critic, "provider"):
+        deck_gate["status"] = "no_model"
+        deck_gate["warning"] = "未启用视觉模型，跳过整册节奏审阅。"
+    else:
+        try:
+            from ..deck_contact_sheet import build_contact_sheet
+            from ..visual_critic import review_deck_rhythm
+
+            sheet_path = out / "qa" / "contact-sheet.jpg"
+            build_contact_sheet(rendered_pages, sheet_path)
+            provider = visual_critic.provider
+            deck_findings = review_deck_rhythm(sheet_path, provider)
+            deck_gate["status"] = "reviewed"
+            deck_gate["findings"] = [
+                {"page": f.page, "severity": f.severity, "rule": f.rule,
+                 "message": f.message, "suggested_change": f.suggested_change}
+                for f in deck_findings
+            ]
+            deck_gate["contact_sheet"] = str(sheet_path)
+        except Exception as exc:  # noqa: BLE001 -- deck review is supplementary
+            deck_gate["status"] = "error"
+            deck_gate["warning"] = f"整册节奏审阅失败：{type(exc).__name__}"
+    gate_report["deck_gate"] = deck_gate
 
 
 def _sync_storyboard_layout(
@@ -773,6 +877,7 @@ def run_pipeline(
     visual_review_reason: str | None = None,
     reference_html_path: str | Path | None = None,
     reference_pdf_path: str | Path | None = None,
+    max_visual_iterations: int = 3,
 ) -> dict[str, Any]:
     """Markdown -> delivered deck + the full decision report."""
     agent = agent or PptAgent()
@@ -1090,6 +1195,7 @@ def run_pipeline(
                 critic=visual_critic,
                 visual_review_reason=visual_review_reason,
             )
+            _run_deck_gate(gate_report, out, agent, visual_critic)
             visual_review = gate_report.get("visual_review") or {
                 "status": "deterministic_fallback",
                 "mode": gate_report.get("mode", "unknown"),
@@ -1120,17 +1226,22 @@ def run_pipeline(
         visual_repair_report["stop_reason"] = "initial_gate_passed"
     elif llm_fn is None:
         visual_repair_report["stop_reason"] = "no_model_for_repair"
-    elif design_plan is not None:
-        visual_repair_report["stop_reason"] = "external_design_plan_is_authoritative"
-    elif route == "clone" and fallback_reason:
-        visual_repair_report["stop_reason"] = "template_route_degraded"
     else:
         from ..storyboard import repair_storyboard_plan
 
         visual_repair_report["enabled"] = True
-        visual_repair_report["stop_reason"] = "max_iterations"
-        for iteration in range(1, 3):
-            repair_requests = _blocking_repair_requests(gate_report)
+        visual_repair_report["stop_reason"] = "budget_exhausted"
+        if design_plan is not None:
+            visual_repair_report["repair_mode"] = "text_and_geometry"
+        elif route == "clone" and fallback_reason:
+            visual_repair_report["repair_mode"] = "text_only"
+        else:
+            visual_repair_report["repair_mode"] = "full"
+        iteration_budget = max(1, min(int(max_visual_iterations), MAX_VISUAL_ITERATIONS))
+        previous_finding_count = _finding_count(gate_report)
+        previous_ssim: float | None = None
+        for iteration in range(1, iteration_budget + 1):
+            repair_requests = _blocking_repair_requests(gate_report, include_warnings=True)
             if not repair_requests:
                 visual_repair_report["stop_reason"] = "no_page_level_findings"
                 break
@@ -1195,19 +1306,42 @@ def run_pipeline(
                     artifacts["pptx"] = str(pptx_path)
                     artifacts["html"] = str(html_path)
                     artifacts["element_cache"] = element_cache
+                repaired_pages = sorted(
+                    int(p) for p in (repair_attempt.get("applied_pages") or [])
+                    if isinstance(p, (int, float)) or (isinstance(p, str) and p.isdigit())
+                )
                 gate_report = agent.gate(
                     Path(artifacts["pptx"]),
                     workspace=out / "qa",
                     reference=reference_pptx,
                     critic=visual_critic,
                     visual_review_reason=visual_review_reason,
+                    pages=repaired_pages or None,
                 )
+                _run_deck_gate(gate_report, out, agent, visual_critic)
                 visual_review = gate_report.get("visual_review") or {
                     "status": "deterministic_fallback",
                     "mode": gate_report.get("mode", "unknown"),
                     "warning": visual_review_reason,
                 }
                 attempt_report["gate_passed"] = gate_report.get("passed")
+                current_finding_count = _finding_count(gate_report)
+                current_ssim: float | None = None
+                visual_gate = gate_report.get("visual_gate") or {}
+                page_scores = [p.get("ssim") for p in (visual_gate.get("pages") or [])
+                               if isinstance(p, dict) and isinstance(p.get("ssim"), (int, float))]
+                if page_scores:
+                    current_ssim = sum(page_scores) / len(page_scores)
+                convergence = _convergence_check(
+                    previous_finding_count, current_finding_count,
+                    previous_ssim, current_ssim,
+                )
+                previous_finding_count = current_finding_count
+                previous_ssim = current_ssim
+                attempt_report["finding_count"] = current_finding_count
+                if convergence:
+                    visual_repair_report["stop_reason"] = convergence
+                    break
             except Exception as exc:  # noqa: BLE001 -- keep the last report deliverable
                 attempt_report["rebuild_error"] = type(exc).__name__
                 visual_repair_report["stop_reason"] = "rebuild_or_gate_failed"

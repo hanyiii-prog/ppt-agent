@@ -78,6 +78,7 @@ $src = $env:PP_SRC
 $out = $env:PP_OUT
 $w = [int]$env:PP_W
 $h = [int]$env:PP_H
+$pages = $env:PP_PAGES
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 $app = New-Object -ComObject PowerPoint.Application
 try {
@@ -85,6 +86,7 @@ try {
     $index = 0
     foreach ($slide in $pres.Slides) {
         $index += 1
+        if ($pages -and (($pages -split ',') -notcontains [string]$index)) { continue }
         $target = Join-Path $out ('slide-{0:D4}.png' -f $index)
         $slide.Export($target, 'PNG', $w, $h)
     }
@@ -112,8 +114,9 @@ def rasterize_with_powerpoint(
     dpi: float = 144.0,
     prefix: str = "slide",
     timeout: float = 240.0,
+    pages: Sequence[int] | None = None,
 ) -> list[Path]:
-    """Export every slide of ``pptx`` to a PNG using real PowerPoint.
+    """Export slides of ``pptx`` to PNGs using real PowerPoint.
 
     Raises :class:`RuntimeError` when PowerPoint is missing or the export
     fails; it never returns a partial or approximate render.
@@ -133,11 +136,13 @@ def rasterize_with_powerpoint(
         copied = _ascii_copy(source, staging)
         script = staging / "export.ps1"
         script.write_text(_EXPORT_PS, encoding="utf-8")
+        page_filter = ",".join(str(p) for p in pages) if pages else ""
         env = {
             "PP_SRC": str(copied),
             "PP_OUT": str(destination),
             "PP_W": str(width_px),
             "PP_H": str(height_px),
+            "PP_PAGES": page_filter,
         }
         completed = subprocess.run(  # noqa: S603 - fixed interpreter, args in env
             [_POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
@@ -185,11 +190,12 @@ def render_real(
     *,
     dpi: int = 144,
     backend: str | None = None,
+    pages: Sequence[int] | None = None,
 ) -> list[Path]:
     """Render with a real engine (PowerPoint/LibreOffice); raises on failure."""
     backend = backend or real_backend()
     if backend == "powerpoint":
-        return rasterize_with_powerpoint(pptx, output_dir, dpi=float(dpi))
+        return rasterize_with_powerpoint(pptx, output_dir, dpi=float(dpi), pages=pages)
     if backend == "libreoffice":
         return _render_libreoffice(Path(pptx), Path(output_dir), dpi=int(dpi))
     raise RuntimeError("no real rasterisation backend available (PowerPoint or LibreOffice)")

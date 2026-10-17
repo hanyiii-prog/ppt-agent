@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from .page_validation import DeckGateReport, validate_rendered_pages
 from .visual_critic import CriticReport, VisualCritic, review_pages
@@ -171,10 +171,14 @@ def validate_delivery(
     policy: DeliveryPolicy | None = None,
     critic: VisualCritic | None = None,
     visual_review_reason: str | None = None,
+    pages: Sequence[int] | None = None,
 ) -> tuple[DeckGateReport, CriticReport, VisualReport | None]:
     """Run the complete production gate over the actual candidate deck."""
     policy = policy or DeliveryPolicy()
-    rendered = render_pptx(pptx, workspace / "rendered")
+    rendered = render_pptx(pptx, workspace / "rendered", pages=pages)
+    if pages is not None:
+        allowed = {int(p) for p in pages}
+        rendered = [p for p in rendered if int(p.stem.split("-")[-1]) in allowed]
     page_gate = validate_rendered_pages(pptx, rendered, blank_threshold=policy.blank_threshold)
     page_gate = merge_layout_audit(page_gate, run_layout_audit(pptx))
     critic_gate = review_pages(
@@ -186,6 +190,7 @@ def validate_delivery(
     if reference_pptx is not None:
         visual_gate = render_and_compare(
             reference_pptx, pptx, workspace / "visual-regression",
+            pages=pages,
             threshold_ssim=policy.visual_ssim,
             threshold_mae=policy.visual_mae,
             threshold_mismatch=policy.visual_mismatch,

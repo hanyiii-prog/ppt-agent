@@ -299,6 +299,7 @@ class PptAgent:
         policy: Any = None,
         critic: Any = None,
         visual_review_reason: str | None = None,
+        pages: Sequence[int] | None = None,
     ) -> dict[str, Any]:
         """Run the delivery gate, degrading to structural checks when needed."""
         from .page_validation import validate_structural_pages
@@ -323,6 +324,7 @@ class PptAgent:
                 policy=policy or DeliveryPolicy(),
                 critic=critic,
                 visual_review_reason=fallback_reason,
+                pages=pages,
             )
             passed = (
                 page_gate.passed

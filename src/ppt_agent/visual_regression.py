@@ -22,7 +22,7 @@ import subprocess
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 class VisualGateUnavailable(RuntimeError):
@@ -150,7 +150,14 @@ def _prepare_output_dir(output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
 
-def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144, *, allow_approximate: bool = False) -> list[Path]:
+def render_pptx(
+    pptx: Path,
+    output_dir: Path,
+    dpi: int = 144,
+    *,
+    allow_approximate: bool = False,
+    pages: Sequence[int] | None = None,
+) -> list[Path]:
     """Render a PPTX to one PNG per slide, real engines first.
 
     PowerPoint (native, the ground truth the user sees) and LibreOffice reproduce
@@ -171,8 +178,8 @@ def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144, *, allow_approxima
     if backend == "powerpoint":
         from . import render_real
 
-        pages = sorted(render_real.rasterize_with_powerpoint(
-            pptx, output_dir, dpi=float(dpi), prefix="slide"))
+        rendered = sorted(render_real.rasterize_with_powerpoint(
+            pptx, output_dir, dpi=float(dpi), prefix="slide", pages=pages))
     elif backend == "libreoffice":
         binary = office_binary()
         with tempfile.TemporaryDirectory(prefix="ppt-agent-render-") as tmp:
@@ -182,7 +189,7 @@ def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144, *, allow_approxima
             if not pdf.exists():
                 raise RuntimeError(f"LibreOffice did not produce PDF for {pptx}")
             _run(["pdftoppm", "-png", "-r", str(dpi), str(pdf), str(output_dir / "slide")])
-        pages = sorted(output_dir.glob("slide-*.png"))
+        rendered = sorted(output_dir.glob("slide-*.png"))
     else:  # backend == "pillow": an approximation, never silently for gates
         if not allow_approximate:
             raise VisualGateUnavailable(
@@ -191,11 +198,11 @@ def render_pptx(pptx: Path, output_dir: Path, dpi: int = 144, *, allow_approxima
             )
         from .preview import rasterize_pptx
 
-        pages = sorted(rasterize_pptx(pptx, output_dir, dpi=float(dpi), prefix="slide"))
+        rendered = sorted(rasterize_pptx(pptx, output_dir, dpi=float(dpi), prefix="slide"))
 
-    if not pages:
+    if not rendered:
         raise RuntimeError(f"no rendered pages found for {pptx}")
-    return pages
+    return rendered
 
 
 # --------------------------------------------------------------------------- #
@@ -441,11 +448,17 @@ def page_score_of(page: PageMetrics) -> float:
     return region_score(page.mae, page.mismatch_ratio, page.ssim)
 
 
-def render_and_compare(reference_pptx: Path, candidate_pptx: Path, workspace: Path,
-                       **thresholds: Any) -> VisualReport:
+def render_and_compare(
+    reference_pptx: Path,
+    candidate_pptx: Path,
+    workspace: Path,
+    *,
+    pages: Sequence[int] | None = None,
+    **thresholds: Any,
+) -> VisualReport:
     regions = thresholds.pop("regions", None)
-    render_pptx(reference_pptx, workspace / "reference")
-    render_pptx(candidate_pptx, workspace / "candidate")
+    render_pptx(reference_pptx, workspace / "reference", pages=pages)
+    render_pptx(candidate_pptx, workspace / "candidate", pages=pages)
     kwargs = {
         "threshold_ssim": 0.995,
         "threshold_mae": 0.005,
