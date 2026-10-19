@@ -995,13 +995,59 @@ def rebuild_cover(slide, *, prs=None, pill_text="", title_text="",
     meta_text = _strip_md(meta_text)
     pill_text = _strip_md(pill_text)
     ranked = _rank_text_shapes(slide, include_empty_ph=True)
+    wrote_title = False
     if title_text and ranked:
         _write_box(ranked[0], title_text, multi=True)
+        wrote_title = True
     byline = meta_text or pill_text
     if byline:
         target = ranked[1] if len(ranked) > 1 else (ranked[0] if ranked else None)
         if target is not None and target is not (ranked[0] if title_text else None):
             _write_box(target, byline)
+    if title_text and not wrote_title:
+        # The template cover had no writable text shapes (photo-only shell).
+        # Overlay a semi-transparent white band + title + meta so the deck
+        # meets the "cover must carry a title" floor.
+        from pptx.util import Inches, Pt as _Pt
+        from pptx.dml.color import RGBColor as _RGB
+        from pptx.enum.text import PP_ALIGN as _Align
+        from pptx.enum.text import MSO_ANCHOR as _Anchor
+        from pptx.enum.shapes import MSO_SHAPE as _Shape
+        from .page_kits import _round as _pr
+        slide_w = prs.slide_width.inches if prs else 13.333
+        slide_h = prs.slide_height.inches if prs else 7.5
+        band_h = 2.2
+        band_y = slide_h - band_h - 0.5
+        _pr(slide, 0, band_y, slide_w, band_h, fill="0D3A66", radius=0,
+            prst="rect")
+        tb = slide.shapes.add_textbox(
+            Inches(0.8), Inches(band_y + 0.35),
+            Inches(slide_w - 1.6), Inches(1.0))
+        tf = tb.text_frame
+        tf.word_wrap = True
+        tf.vertical_anchor = _Anchor.MIDDLE
+        p = tf.paragraphs[0]
+        p.alignment = _Align.CENTER
+        r = p.add_run()
+        r.text = title_text
+        r.font.size = _Pt(32)
+        r.font.bold = True
+        r.font.name = font
+        r.font.color.rgb = _RGB.from_string("FFFFFF")
+        if byline:
+            tb2 = slide.shapes.add_textbox(
+                Inches(0.8), Inches(band_y + 1.45),
+                Inches(slide_w - 1.6), Inches(0.6))
+            tf2 = tb2.text_frame
+            tf2.word_wrap = True
+            tf2.vertical_anchor = _Anchor.MIDDLE
+            p2 = tf2.paragraphs[0]
+            p2.alignment = _Align.CENTER
+            r2 = p2.add_run()
+            r2.text = byline
+            r2.font.size = _Pt(14)
+            r2.font.name = font
+            r2.font.color.rgb = _RGB.from_string("C7E2FB")
     # any placeholder we did not write would resolve back to its layout twin and
     # paint the master's "click to edit" prompt -- drop those dead DNA slots.
     drop_empty_placeholders(slide)

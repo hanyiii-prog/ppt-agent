@@ -437,6 +437,28 @@ def _archetype_to_kit(archetype: str, item_count: int, rotation: int = 0) -> str
     return kit if kit in KITS else "column_cards"
 
 
+_LAYER_RE = re.compile(r"第[一二三四五六七八九十\d]{1,3}层|[四五六七八]层架构|五层|分层架构|技术架构", re.UNICODE)
+_TIMELINE_RE = re.compile(r"\d{1,2}月|\d{1,2}日|时间|节点|阶段|步骤|第[一二三四五]步|日程", re.UNICODE)
+_NUMERIC_RE = re.compile(r"\d+(\.\d+)?\s*[%％]|共\s*\d+|合计\s*\d+|达到\s*\d+", re.UNICODE)
+_COMPARE_RE = re.compile(r"对比|相比|vs|VS|差异|优劣|现状.*方案|before.*after", re.UNICODE)
+
+
+def _detect_content_kit(texts: list[str]) -> str | None:
+    """Detect content features and return the best-matching kit, or None."""
+    joined = "\n".join(t for t in texts if t)
+    layer_matches = _LAYER_RE.findall(joined)
+    if len(layer_matches) >= 2 and len(texts) >= 3:
+        return "stage_cards"
+    timeline_matches = _TIMELINE_RE.findall(joined)
+    if len(timeline_matches) >= 2 and len(texts) >= 3:
+        return "progress_timeline"
+    if _NUMERIC_RE.search(joined) and len(texts) >= 2:
+        return "quad_cards"
+    if _COMPARE_RE.search(joined) and len(texts) >= 2:
+        return "two_panel_list"
+    return None
+
+
 _CARD_LEAD_RE = re.compile(r"^\s*([^：:。.;；]{2,12})[：:。.;；]\s*")
 
 
@@ -717,12 +739,36 @@ def _page_item_count(blocks: list[Any]) -> int:
 def _coerce_design_plan(plan):
     """Accept either a raw page list or a ``{deck, meta, pages}`` envelope."""
     if isinstance(plan, list):
-        return plan
+        return _diversify_kits(plan)
     if isinstance(plan, dict):
         pages = plan.get("pages")
         if isinstance(pages, list):
-            return pages
+            return _diversify_kits(pages)
     raise ValueError("design_plan must be a list of page specs or a dict with a pages list")
+
+
+_CONTENT_KITS: frozenset[str] = frozenset({
+    "quad_cards", "column_cards", "two_panel_list", "stage_cards",
+    "progress_timeline", "stage_timeline", "org_chart",
+})
+_KIT_ALTERNATIVES: dict[str, list[str]] = {
+    "quad_cards": ["column_cards", "stage_cards", "two_panel_list"],
+    "two_panel_list": ["column_cards", "quad_cards", "stage_cards"],
+    "column_cards": ["quad_cards", "two_panel_list", "stage_cards"],
+    "stage_cards": ["quad_cards", "column_cards"],
+}
+
+
+def _diversify_kits(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rotate kits when 3+ consecutive content pages repeat the same layout."""
+    for i in range(len(pages) - 2):
+        kit = pages[i].get("kit")
+        if not kit or kit not in _CONTENT_KITS:
+            continue
+        if (pages[i + 1].get("kit") == kit and pages[i + 2].get("kit") == kit):
+            alt = _KIT_ALTERNATIVES.get(kit, ["column_cards"])[0]
+            pages[i + 2]["kit"] = alt
+    return pages
 
 
 def _plan_to_clone_pages(
@@ -802,11 +848,19 @@ def _plan_to_clone_pages(
                 "meta": doc_title,
             })
         else:
-            kit = _archetype_to_kit(
-                archetype,
-                _page_item_count(blocks),
-                rotation=_content_rotation,
-            )
+            block_texts = [b.text or "" for b in blocks if b.text]
+            for b in blocks:
+                if b.type in ("bullets", "ordered"):
+                    block_texts.extend(b.items or [])
+            detected = _detect_content_kit(block_texts)
+            if detected:
+                kit = detected
+            else:
+                kit = _archetype_to_kit(
+                    archetype,
+                    _page_item_count(blocks),
+                    rotation=_content_rotation,
+                )
             _content_rotation += 1
             page_title = page.get("title") or ""
             # filter out blocks whose text matches the page title (avoids

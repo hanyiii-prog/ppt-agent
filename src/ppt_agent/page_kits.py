@@ -80,6 +80,36 @@ BOT = 7.05                # content bottom
 NOTE_H = 0.83
 NOTE_Y = BOT - NOTE_H
 
+
+def _adaptive_font_size(
+    text: str,
+    box_w: float,
+    box_h: float,
+    base_size: float,
+    *,
+    line_spacing: float = 1.35,
+    max_scale: float = 1.5,
+    min_fill: float = 0.45,
+) -> float:
+    """Scale ``base_size`` up when the text under-fills its box.
+
+    Estimates the line count for CJK text at ``base_size`` in a box of
+    ``box_w`` × ``box_h`` inches, then grows the font until the estimated
+    fill ratio reaches ``min_fill`` or the scale hits ``max_scale``.
+    """
+    if not text or not text.strip() or box_w <= 0 or box_h <= 0:
+        return base_size
+    char_w = base_size / 72.0  # CJK glyph is roughly square
+    chars_per_line = max(4.0, box_w / char_w)
+    line_h = base_size / 72.0 * line_spacing
+    lines = sum(max(1, -(-len(seg) // int(chars_per_line))) for seg in text.split("\n"))
+    text_h = lines * line_h
+    fill = text_h / box_h
+    if fill >= min_fill:
+        return base_size
+    scale = min(max_scale, min_fill / max(fill, 0.01))
+    return round(min(base_size * scale, base_size * max_scale), 1)
+
 # --- chapter (section) page grid, straight from the template/Kimi ----------
 CH_TITLE = (1.564, 2.100, 8.889, 1.212)      # 44pt bold, white
 CH_LINE = (1.586, 3.450, 6.596, 0.019)       # white hairline
@@ -428,8 +458,12 @@ def quad_cards(slide, cards, note=None, *, title="", lead=None, prs=None,
         _tb(slide, x + 1.000, y + 0.250, cw - 1.222, 0.556, c["title"],
             size=15, color=PD, bold=True, anchor=MSO_ANCHOR.MIDDLE)
         body = c.get("body", "")
-        _tb(slide, x + 0.277, y + 0.944, cw - 0.554, chh - 1.05,
-            _runs(body), spacing=1.35)
+        body_text = body if isinstance(body, str) else " ".join(
+            item[0] if isinstance(item, tuple) else item for item in body)
+        body_w, body_h = cw - 0.554, chh - 1.05
+        body_size = _adaptive_font_size(body_text, body_w, body_h, 10.5)
+        _tb(slide, x + 0.277, y + 0.944, body_w, body_h,
+            _runs(body, size=body_size), spacing=1.35)
     if note:
         _note_bar(slide, note)
 
@@ -561,9 +595,16 @@ def column_cards(slide, cards, *, cols=None, title="", lead=None, prs=None,
         if isinstance(lines, str):
             lines = [lines]
         if lines:
+            body_text = "\n".join(
+                ln[0] if isinstance(ln, (list, tuple)) and not isinstance(ln, str) else ln
+                for ln in lines)
+            body_h = y + card_h - ry - 0.16
+            body_size = _adaptive_font_size(
+                body_text, w - 0.40, body_h, c.get("size", 10),
+                line_spacing=1.32)
             norm = [ln if isinstance(ln, (list, tuple)) and not isinstance(ln, str)
-                    else (ln, c.get("size", 10), TXT, False) for ln in lines]
-            _tb(slide, x + 0.20, ry, w - 0.40, y + card_h - ry - 0.16,
+                    else (ln, body_size, TXT, False) for ln in lines]
+            _tb(slide, x + 0.20, ry, w - 0.40, body_h,
                 norm, spacing=1.32)
     if bottom:
         bgrad = bottom.get("grad", bottom_grad)
@@ -858,21 +899,33 @@ def two_panel_list(slide, left, right, *, title="", lead=None, prs=None):
         ry = top + 1.05
         rows = panel.get("rows", [])
         if sub:
+            n_sub = max(1, len(rows))
+            sub_pitch = (ph - 1.05 - 0.15) / n_sub
             for head, desc in rows:
-                _round(slide, x + 0.27, ry, pw - 0.54, 1.81, fill=CHIP, radius=0.08)
+                sub_h = min(1.81, sub_pitch - 0.19)
+                _round(slide, x + 0.27, ry, pw - 0.54, sub_h, fill=CHIP, radius=0.08)
                 _tb(slide, x + 0.52, ry + 0.17, pw - 1.0, 0.33, head, size=13,
                     color=INK, bold=True)
-                _tb(slide, x + 0.52, ry + 0.56, pw - 1.0, 1.11, desc, size=10,
-                    color=TXT, spacing=1.3)
-                ry += 2.00
+                desc_h = sub_h - 0.56
+                desc_size = _adaptive_font_size(desc, pw - 1.0, desc_h, 10,
+                                                line_spacing=1.3)
+                _tb(slide, x + 0.52, ry + 0.56, pw - 1.0, desc_h, desc,
+                    size=desc_size, color=TXT, spacing=1.3)
+                ry += sub_pitch
         else:
+            n_left = max(1, len(rows))
+            left_pitch = (ph - 1.05) / n_left
             for k, (head, desc) in enumerate(rows):
                 if k:
                     _hair(slide, x + 0.36, ry - 0.30, pw - 0.72, 0.012)
                 _icon(slide, x + 0.36, ry + 0.10, 0.42, P, "cloud")
-                _tb(slide, x + 1.00, ry, pw - 1.3, 0.83,
-                    [(head, 11, TXT, True), (desc, 10, TXT, False)], spacing=1.25)
-                ry += 1.30
+                left_h = min(0.83, left_pitch - 0.30)
+                desc_size = _adaptive_font_size(
+                    desc, pw - 1.3, left_h * 0.6, 10, line_spacing=1.25)
+                _tb(slide, x + 1.00, ry, pw - 1.3, left_h,
+                    [(head, 11, TXT, True), (desc, desc_size, TXT, False)],
+                    spacing=1.25)
+                ry += max(1.30, left_pitch)
 
 
 # --- kit: dated progress narrative ----------------------------------------
