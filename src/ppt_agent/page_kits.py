@@ -62,48 +62,123 @@ STATUS = {"done": GRAD_PRIMARY, "doing": GRAD_WARN, "plan": GRAD_PLAN}
 FONT = "思源雅黑"
 
 
-def configure_palette(design_dna: dict | None) -> None:
-    """Override the module palette from a design DNA's named colour classes.
+# --- curated professional palettes ------------------------------------------
+# The LLM never picks raw hex values. It may name one of these palettes, or
+# the template's dominant hue maps to the closest match automatically.
+CURATED_PALETTES: dict[str, dict[str, object]] = {
+    "medical_blue": {
+        "P": "1185FE", "PD": "09437F", "INK": "0D64BF", "PS": "F4F9FF",
+        "CHIP": "EAF4FF", "DIV": "BFD9F5", "TXT": "262626", "MUT": "68737F",
+        "GRAD_PRIMARY": ("0C67BC", "1687F1"),
+        "GRAD_STAGE2": ("2B8FF0", "5EB0F8"),
+        "GRAD_STAGE3": ("70B6FE", "9CCBFB"),
+        "GRAD_WARN": ("F5A623", "FFBA55"),
+        "GRAD_PLAN": ("A9CFFB", "BDD9FA"),
+    },
+    "corporate_navy": {
+        "P": "1B3A5C", "PD": "0D1F33", "INK": "2A5B8A", "PS": "F0F4F8",
+        "CHIP": "D9E4EF", "DIV": "A8BFD4", "TXT": "1A1A2E", "MUT": "5C6B7A",
+        "GRAD_PRIMARY": ("1B3A5C", "2A5B8A"),
+        "GRAD_STAGE2": ("2A5B8A", "4A7BA6"),
+        "GRAD_STAGE3": ("4A7BA6", "8FB4D4"),
+        "GRAD_WARN": ("C87F2F", "E0A050"),
+        "GRAD_PLAN": ("A8BFD4", "D9E4EF"),
+    },
+    "forest_green": {
+        "P": "1B7A3E", "PD": "0D4A24", "INK": "2E9E55", "PS": "F0F7F2",
+        "CHIP": "D9F0DF", "DIV": "A8D4B4", "TXT": "1A2E1E", "MUT": "5C7A64",
+        "GRAD_PRIMARY": ("0D4A24", "1B7A3E"),
+        "GRAD_STAGE2": ("1B7A3E", "2E9E55"),
+        "GRAD_STAGE3": ("2E9E55", "7FC99A"),
+        "GRAD_WARN": ("C87F2F", "E0A050"),
+        "GRAD_PLAN": ("A8D4B4", "D9F0DF"),
+    },
+    "imperial_red": {
+        "P": "C0392B", "PD": "7A1A10", "INK": "D45450", "PS": "FDF3F2",
+        "CHIP": "FAE0DE", "DIV": "E8B0AC", "TXT": "2E1A18", "MUT": "8A5C58",
+        "GRAD_PRIMARY": ("7A1A10", "C0392B"),
+        "GRAD_STAGE2": ("C0392B", "D45450"),
+        "GRAD_STAGE3": ("D45450", "EDA0A0"),
+        "GRAD_WARN": ("B8860B", "DAA520"),
+        "GRAD_PLAN": ("E8B0AC", "FAE0DE"),
+    },
+    "slate_professional": {
+        "P": "3B4A5A", "PD": "1E2A36", "INK": "5470A0", "PS": "F2F4F7",
+        "CHIP": "DEE4EB", "DIV": "AEBDCB", "TXT": "2A2A2A", "MUT": "6B7B8A",
+        "GRAD_PRIMARY": ("1E2A36", "3B4A5A"),
+        "GRAD_STAGE2": ("3B4A5A", "5470A0"),
+        "GRAD_STAGE3": ("5470A0", "9AB0CC"),
+        "GRAD_WARN": ("B8860B", "DAA520"),
+        "GRAD_PLAN": ("AEBDCB", "DEE4EB"),
+    },
+    "warm_earth": {
+        "P": "8B6F47", "PD": "5A3E22", "INK": "A08050", "PS": "F7F3EE",
+        "CHIP": "EDE0D0", "DIV": "D4BCA0", "TXT": "2E2620", "MUT": "8A7A6A",
+        "GRAD_PRIMARY": ("5A3E22", "8B6F47"),
+        "GRAD_STAGE2": ("8B6F47", "A08050"),
+        "GRAD_STAGE3": ("A08050", "D4BCA0"),
+        "GRAD_WARN": ("B8541A", "D48050"),
+        "GRAD_PLAN": ("D4BCA0", "EDE0D0"),
+    },
+}
 
-    Missing entries keep the built-in blue default so the function is safe
-    to call with partial or empty DNA. Call once per deck before rendering.
+_DEFAULT_PALETTE = "medical_blue"
+
+
+def _hue_distance(hex_a: str, hex_b: str) -> float:
+    """Approximate hue distance (0=identical hue, 0.5=complementary)."""
+    import colorsys
+    def _hue(h):
+        h = h.lstrip("#")
+        r, g, b = int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255
+        return colorsys.rgb_to_hls(r, g, b)[0]
+    return min(abs(_hue(hex_a) - _hue(hex_b)), 1 - abs(_hue(hex_a) - _hue(hex_b)))
+
+
+def select_palette_name(design_dna: dict | None = None, hint: str | None = None) -> str:
+    """Pick a curated palette name from a design DNA's primary hue or a hint.
+
+    Priority: explicit ``hint`` > template hue match > default.
+    The LLM can only choose from ``CURATED_PALETTES.keys()``.
+    """
+    if hint and hint in CURATED_PALETTES:
+        return hint
+    primary = ((design_dna or {}).get("color") or {}).get("named", {}).get("primary")
+    if primary:
+        best_name, best_dist = _DEFAULT_PALETTE, 1.0
+        for name, pal in CURATED_PALETTES.items():
+            dist = _hue_distance(primary, str(pal["P"]))
+            if dist < best_dist:
+                best_name, best_dist = name, dist
+        return best_name
+    return _DEFAULT_PALETTE
+
+def configure_palette(design_dna: dict | None) -> None:
+    """Apply a curated professional palette selected by the template's hue.
+
+    The LLM never picks raw hex values. The template's dominant hue maps to
+    the closest entry in ``CURATED_PALETTES``; the full palette (text, chip,
+    divider, gradients, warn/plan ramps) comes from that entry as a coherent
+    set, so no single off-palette color can slip through.
     """
     global P, PD, INK, PS, CHIP, DIV, TXT, MUT, WHITE
     global GRAD_PRIMARY, GRAD_STAGE2, GRAD_STAGE3, GRAD_WARN, GRAD_PLAN
     global STATUS
-    if not isinstance(design_dna, dict):
-        return
-    named = (design_dna.get("color") or {}).get("named") or {}
-    primary = named.get("primary")
-    primary_deep = named.get("primary_deep") or primary
-    primary_soft = named.get("primary_soft")
-    surface = named.get("surface")
-    line_c = named.get("line")
-    text_c = named.get("text")
-    text_muted = named.get("text_muted")
-    if primary:
-        P = primary.upper()
-        INK = primary.upper()
-    if primary_deep:
-        PD = primary_deep.upper()
-    if primary_soft:
-        CHIP = primary_soft.upper()
-    if surface:
-        PS = surface.upper()
-    if line_c:
-        DIV = line_c.upper()
-    if text_c:
-        TXT = text_c.upper()
-    if text_muted:
-        MUT = text_muted.upper()
-    if primary and primary_soft:
-        GRAD_PRIMARY = (primary.upper(), primary_soft.upper())
-        GRAD_STAGE2 = (primary.upper(), primary_soft.upper())
-        GRAD_STAGE3 = (primary_soft.upper(), primary.upper())
-    if named.get("negative"):
-        GRAD_WARN = (named["negative"].upper(), named["negative"].upper())
-    if primary_soft and surface:
-        GRAD_PLAN = (primary_soft.upper(), surface.upper())
+    name = select_palette_name(design_dna)
+    pal = CURATED_PALETTES[name]
+    P = str(pal["P"])
+    PD = str(pal["PD"])
+    INK = str(pal["INK"])
+    PS = str(pal["PS"])
+    CHIP = str(pal["CHIP"])
+    DIV = str(pal["DIV"])
+    TXT = str(pal["TXT"])
+    MUT = str(pal["MUT"])
+    GRAD_PRIMARY = tuple(pal["GRAD_PRIMARY"])  # type: ignore[assignment]
+    GRAD_STAGE2 = tuple(pal["GRAD_STAGE2"])    # type: ignore[assignment]
+    GRAD_STAGE3 = tuple(pal["GRAD_STAGE3"])    # type: ignore[assignment]
+    GRAD_WARN = tuple(pal["GRAD_WARN"])        # type: ignore[assignment]
+    GRAD_PLAN = tuple(pal["GRAD_PLAN"])        # type: ignore[assignment]
     STATUS = {"done": GRAD_PRIMARY, "doing": GRAD_WARN, "plan": GRAD_PLAN}
 
 

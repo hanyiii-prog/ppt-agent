@@ -20,26 +20,33 @@ class TestConfigurePalette:
         configure_palette(None)
         assert K.PD == before
 
-    def test_primary_overrides_ink_and_p(self):
+    def test_green_dna_maps_to_forest_green(self):
         import ppt_agent.page_kits as K
         configure_palette({
-            "color": {"named": {"primary": "00FF00", "primary_deep": "003300"}},
+            "color": {"named": {"primary": "1B7A3E"}},
         })
-        assert K.P == "00FF00"
-        assert K.INK == "00FF00"
-        assert K.PD == "003300"
+        assert K.P == "1B7A3E"
+        assert K.PD == "0D4A24"
+        assert K.INK == "2E9E55"
 
-    def test_partial_dna_keeps_defaults(self):
+    def test_red_dna_maps_to_imperial_red(self):
         import ppt_agent.page_kits as K
-        before = K.MUT
-        configure_palette({"color": {"named": {"primary": "AA0000"}}})
-        assert K.MUT == before
+        configure_palette({
+            "color": {"named": {"primary": "C0392B"}},
+        })
+        assert K.P == "C0392B"
+        assert K.PD == "7A1A10"
+
+    def test_hint_selects_exact_palette(self):
+        import ppt_agent.page_kits as K
+        from ppt_agent.page_kits import select_palette_name
+        assert select_palette_name(hint="warm_earth") == "warm_earth"
 
     def test_empty_dna_noop(self):
         import ppt_agent.page_kits as K
-        before = K.PD
         configure_palette({})
-        assert K.PD == before
+        # Empty DNA falls back to the default curated palette
+        assert K.PD == "09437F"  # medical_blue default
 
 
 class TestFontScale:
