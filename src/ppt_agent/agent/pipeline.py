@@ -1168,6 +1168,7 @@ def run_pipeline(
             clone_result = render_clone_deck(
                 template_path, clone_pages, pptx_path,
                 audit=False, fidelity=True,
+                design_dna=design_dna,
             )
             artifacts["pptx"] = str(pptx_path)
             rendered_pages = int(clone_result.get("pages") or len(clone_pages))
@@ -1328,6 +1329,7 @@ def run_pipeline(
                     clone_result = render_clone_deck(
                         template_path, clone_pages, pptx_path,
                         audit=False, fidelity=True,
+                        design_dna=design_dna,
                     )
                     artifacts["pptx"] = str(pptx_path)
                     rendered_pages = int(clone_result.get("pages") or len(clone_pages))

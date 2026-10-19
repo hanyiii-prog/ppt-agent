@@ -547,6 +547,8 @@ def render_clone_deck(
     audit: bool = True,
     fidelity: bool = True,
     render: bool = False,
+    design_dna: dict[str, Any] | None = None,
+    font_scale: float = 1.0,
 ) -> dict[str, Any]:
     """Render a page plan through the clone route and (by default) audit it.
 
@@ -569,6 +571,10 @@ def render_clone_deck(
         validate_page_plan_editability(pages)
     except ValueError as exc:
         raise CloneBuildError(str(exc)) from None
+
+    from . import page_kits as _pk
+    _pk.configure_palette(design_dna)
+    _pk.configure_font_scale(font_scale)
 
     deck = CloneShell(str(template))
     warnings: list[str] = []

@@ -39,7 +39,7 @@ from pptx.util import Inches, Pt
 from .clone_shell import (CHROME_BAR, add_content_chrome, box, clear_body,
                           gradient_fill, layout_chrome, set_geom, _strip_md)
 
-# --- palette ---------------------------------------------------------------
+# --- palette (module-level, overridable via configure_palette) --------------
 P = CHROME_BAR            # brand blue bar
 PD = "09437F"             # title / heading navy
 INK = "0D64BF"            # inline blue
@@ -60,6 +60,91 @@ GRAD_PLAN = ("A9CFFB", "BDD9FA")      # not-yet-started light blue
 STATUS = {"done": GRAD_PRIMARY, "doing": GRAD_WARN, "plan": GRAD_PLAN}
 
 FONT = "思源雅黑"
+
+
+def configure_palette(design_dna: dict | None) -> None:
+    """Override the module palette from a design DNA's named colour classes.
+
+    Missing entries keep the built-in blue default so the function is safe
+    to call with partial or empty DNA. Call once per deck before rendering.
+    """
+    global P, PD, INK, PS, CHIP, DIV, TXT, MUT, WHITE
+    global GRAD_PRIMARY, GRAD_STAGE2, GRAD_STAGE3, GRAD_WARN, GRAD_PLAN
+    global STATUS
+    if not isinstance(design_dna, dict):
+        return
+    named = (design_dna.get("color") or {}).get("named") or {}
+    primary = named.get("primary")
+    primary_deep = named.get("primary_deep") or primary
+    primary_soft = named.get("primary_soft")
+    surface = named.get("surface")
+    line_c = named.get("line")
+    text_c = named.get("text")
+    text_muted = named.get("text_muted")
+    if primary:
+        P = primary.upper()
+        INK = primary.upper()
+    if primary_deep:
+        PD = primary_deep.upper()
+    if primary_soft:
+        CHIP = primary_soft.upper()
+    if surface:
+        PS = surface.upper()
+    if line_c:
+        DIV = line_c.upper()
+    if text_c:
+        TXT = text_c.upper()
+    if text_muted:
+        MUT = text_muted.upper()
+    if primary and primary_soft:
+        GRAD_PRIMARY = (primary.upper(), primary_soft.upper())
+        GRAD_STAGE2 = (primary.upper(), primary_soft.upper())
+        GRAD_STAGE3 = (primary_soft.upper(), primary.upper())
+    if named.get("negative"):
+        GRAD_WARN = (named["negative"].upper(), named["negative"].upper())
+    if primary_soft and surface:
+        GRAD_PLAN = (primary_soft.upper(), surface.upper())
+    STATUS = {"done": GRAD_PRIMARY, "doing": GRAD_WARN, "plan": GRAD_PLAN}
+
+
+def _shift_hex(hex_color: str, factor: float) -> str:
+    """Lighten (factor > 1) or darken (factor < 1) a hex colour."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    if factor >= 1.0:
+        f = factor - 1.0
+        r = min(255, int(r + (255 - r) * f))
+        g = min(255, int(g + (255 - g) * f))
+        b = min(255, int(b + (255 - b) * f))
+    else:
+        r = max(0, int(r * factor))
+        g = max(0, int(g * factor))
+        b = max(0, int(b * factor))
+    return f"{r:02X}{g:02X}{b:02X}"
+
+
+# --- font size table (overridable scale factor) ----------------------------
+FONT_TITLE = 20          # content_header page title
+FONT_LEAD = 14           # content_header lead line
+FONT_CHAPTER = 44        # section page big title
+FONT_TOC_ITEM = 20       # TOC entry number + title
+FONT_CARD_TITLE = 15     # card heading inside kits
+FONT_CARD_BODY = 10.5    # card body inside kits
+FONT_CHIP = 10.5         # chip / badge text
+FONT_BOTTOM_TITLE = 17   # bottom bar title (gradient variant)
+FONT_SCALE = 1.0         # global multiplier, set from pipeline
+
+
+def configure_font_scale(scale: float) -> None:
+    """Set a global font size multiplier (call before rendering)."""
+    global FONT_SCALE
+    FONT_SCALE = max(0.5, min(2.0, float(scale)))
+
+
+def _fs(base: float) -> float:
+    """Return a font size adjusted by the global scale, rounded to 0.5."""
+    return round(base * FONT_SCALE * 2) / 2
+
 
 # --- vertical grid ---------------------------------------------------------
 # Values are the template's / Kimi's own, not invented ones:
@@ -236,8 +321,8 @@ def _icon(slide, x, y, size, color=P, shape="cloud"):
 
 
 # --- kit: header -----------------------------------------------------------
-def content_header(slide, title, lead=None, *, prs=None, title_size=20,
-                   lead_size=14):
+def content_header(slide, title, lead=None, *, prs=None, title_size=None,
+                   lead_size=None):
     """Ensure the content chrome + write the title and optional lead.
 
     Two things this does NOT do, deliberately:
@@ -255,16 +340,17 @@ def content_header(slide, title, lead=None, *, prs=None, title_size=20,
     """
     add_content_chrome(slide, prs=prs)          # inherits when the layout has it
     # Always draw a fresh title text box (C-route: no placeholder dependency).
-    _tb(slide, TITLE_X, TITLE_Y, TITLE_W, TITLE_H, title, size=title_size,
+    _tb(slide, TITLE_X, TITLE_Y, TITLE_W, TITLE_H, title,
+        size=_fs(title_size or FONT_TITLE),
         color=PD, bold=True)
     if lead:
-        _tb(slide, LEAD_X, LEAD_Y, LEAD_W, LEAD_H, lead, size=lead_size,
-            color=INK, bold=True)
+        _tb(slide, LEAD_X, LEAD_Y, LEAD_W, LEAD_H, lead,
+            size=_fs(lead_size or FONT_LEAD), color=INK, bold=True)
     return TOP
 
 
 # --- kit: chapter / section page -------------------------------------------
-def chapter_page(slide, title, lines, *, prs=None, title_size=44, fg=None):
+def chapter_page(slide, title, lines, *, prs=None, title_size=None, fg=None):
     """A chapter divider page -- and the canonical example of *inheriting*
     template chrome instead of redrawing it.
 
@@ -298,7 +384,7 @@ def chapter_page(slide, title, lines, *, prs=None, title_size=44, fg=None):
     if isinstance(lines, str):
         lines = [ln for ln in lines.split("\n") if ln.strip()]
     x, y, w, h = CH_TITLE
-    _tb(slide, x, y, w, h, title, size=title_size, color=fg, bold=True,
+    _tb(slide, x, y, w, h, title, size=_fs(title_size or FONT_CHAPTER), color=fg, bold=True,
         anchor=MSO_ANCHOR.MIDDLE)
     lx, ly, lw, lh = CH_LINE
     _hair(slide, lx, ly, lw, lh, fg)
@@ -378,10 +464,10 @@ def toc_page(slide, items, note=None, *, title="目录", title_en="CONTENTS",
     deco.shadow.inherit = False
 
     x, y, w, h = TOC_TITLE
-    _tb(slide, x, y, w, h, title, size=44, color=PD, bold=True,
+    _tb(slide, x, y, w, h, title, size=_fs(FONT_CHAPTER), color=PD, bold=True,
         anchor=MSO_ANCHOR.MIDDLE)
     x, y, w, h = TOC_TITLE_EN
-    _tb(slide, x, y, w, h, title_en, size=15, color=TOC_TITLE_EN_COLOR,
+    _tb(slide, x, y, w, h, title_en, size=_fs(FONT_CARD_TITLE), color=TOC_TITLE_EN_COLOR,
         bold=True)
     x, y, w, h = TOC_ACCENT
     _round(slide, x, y, w, h, fill=P, radius=0.50)
@@ -407,14 +493,14 @@ def toc_page(slide, items, note=None, *, title="目录", title_en="CONTENTS",
                       rot_with_shape=True)
         circ.line.fill.background()
         circ.shadow.inherit = False
-        _tb(slide, TOC_ITEM_X, iy, 0.750, 0.750, "%02d" % (k + 1), size=20,
+        _tb(slide, TOC_ITEM_X, iy, 0.750, 0.750, "%02d" % (k + 1), size=_fs(FONT_TOC_ITEM),
             color=WHITE, bold=True, align=PP_ALIGN.CENTER,
             anchor=MSO_ANCHOR.MIDDLE)
-        _tb(slide, TOC_ITEM_X + 1.0278, iy, 6.6667, 0.4167, it_title, size=20,
+        _tb(slide, TOC_ITEM_X + 1.0278, iy, 6.6667, 0.4167, it_title, size=_fs(FONT_TOC_ITEM),
             color=PD, bold=True)
         if it_sub:
             _tb(slide, TOC_ITEM_X + 1.0278, iy + 0.4444, 6.6667, 0.2778,
-                it_sub, size=10.5, color=TOC_ITEM_SUB)
+                it_sub, size=_fs(FONT_CARD_BODY), color=TOC_ITEM_SUB)
         _hair(slide, TOC_ITEM_X, iy + 1.0000, 7.9167, 0.0097, DIV)
     return slide
 
@@ -456,7 +542,7 @@ def quad_cards(slide, cards, note=None, *, title="", lead=None, prs=None,
                grad=GRAD_STAGE3, radius=0.50)
         _icon(slide, x + 0.416, y + 0.389, 0.278, P, c.get("icon", "cloud"))
         _tb(slide, x + 1.000, y + 0.250, cw - 1.222, 0.556, c["title"],
-            size=15, color=PD, bold=True, anchor=MSO_ANCHOR.MIDDLE)
+            size=_fs(FONT_CARD_TITLE), color=PD, bold=True, anchor=MSO_ANCHOR.MIDDLE)
         body = c.get("body", "")
         body_text = body if isinstance(body, str) else " ".join(
             item[0] if isinstance(item, tuple) else item for item in body)
@@ -468,10 +554,12 @@ def quad_cards(slide, cards, note=None, *, title="", lead=None, prs=None,
         _note_bar(slide, note)
 
 
-def _runs(body, size=10.5, color=TXT):
+def _runs(body, size=None, color=TXT):
     """Normalise a body into ``_tb`` lines: str -> plain; list -> styled runs
     merged into one paragraph per group. ``color`` is the plain-run colour
     (pass a light colour when the body sits on a dark gradient panel)."""
+    if size is None:
+        size = _fs(FONT_CARD_BODY)
     if isinstance(body, str):
         return [(body, size, color, False)]
     out = []
@@ -564,7 +652,7 @@ def column_cards(slide, cards, *, cols=None, title="", lead=None, prs=None,
                    grad=GRAD_STAGE3, radius=0.50)
             _icon(slide, x + w / 2 - 0.2085, y + 0.514, 0.417, P, c["icon"])
             _tb(slide, x + 0.222, y + 1.305, w - 0.444, 0.361, c["title"],
-                size=15, color=PD, bold=True, align=PP_ALIGN.CENTER)
+                size=_fs(FONT_CARD_TITLE), color=PD, bold=True, align=PP_ALIGN.CENTER)
             _tb(slide, x + 0.277, y + 1.750, w - 0.554, card_h - 1.85,
                 _runs(c.get("body", ""), size=c.get("size", 10.0)), spacing=1.30)
             continue
@@ -588,7 +676,7 @@ def column_cards(slide, cards, *, cols=None, title="", lead=None, prs=None,
             ry = y + 0.66
         for chip in c.get("chips", []) or []:
             _round(slide, x + 0.22, ry, w - 0.44, 0.40, fill=CHIP, radius=0.30)
-            _tb(slide, x + 0.22, ry, w - 0.44, 0.40, chip, size=10.5, color=INK,
+            _tb(slide, x + 0.22, ry, w - 0.44, 0.40, chip, size=_fs(FONT_CARD_BODY), color=INK,
                 bold=True, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
             ry += 0.50
         lines = c.get("lines", [])
@@ -894,7 +982,7 @@ def two_panel_list(slide, left, right, *, title="", lead=None, prs=None):
     for x, panel, sub in ((M, left, False), (M + pw + gap, right, True)):
         _round(slide, x, top, pw, ph, fill=WHITE, line=DIV, radius=0.06)
         _round(slide, x, top, pw, 0.67, grad=GRAD_PRIMARY, radius=0.06)
-        _tb(slide, x + 0.27, top, pw - 0.54, 0.67, panel["title"], size=15,
+        _tb(slide, x + 0.27, top, pw - 0.54, 0.67, panel["title"], size=_fs(FONT_CARD_TITLE),
             color=WHITE, bold=True, anchor=MSO_ANCHOR.MIDDLE)
         ry = top + 1.05
         rows = panel.get("rows", [])
