@@ -434,6 +434,11 @@ def _archetype_to_kit(archetype: str, item_count: int, rotation: int = 0) -> str
         kit = "column_cards"
     elif kit == "org_chart" and item_count < 3:
         kit = "quad_cards"
+    elif kit in ("stage_cards", "stage_timeline") and not 2 <= item_count <= 4:
+        # Horizontal arrows + card columns only fit 2-4 stages.
+        kit = "progress_timeline" if item_count <= 6 else "column_cards"
+    elif kit == "progress_timeline" and not 2 <= item_count <= 8:
+        kit = "column_cards"
     return kit if kit in KITS else "column_cards"
 
 
@@ -950,6 +955,15 @@ def _plan_to_clone_pages(
                 spec["right"] = right
             elif kit == "stage_cards":
                 spec["stages"] = _blocks_to_stages(blocks, page_title=page_title)
+            elif kit == "stage_timeline":
+                stages_raw = _blocks_to_stages(blocks, page_title=page_title)
+                spec["stages"] = [
+                    {"head": s.get("head", ""),
+                     "tasks": s.get("desc", ""),
+                     "milestone": s.get("milestone", ""),
+                     "strong": False}
+                    for s in stages_raw
+                ]
             else:
                 spec["cards"] = _blocks_to_column_cards(blocks, page_title=page_title)
             pages.append(spec)
