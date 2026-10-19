@@ -32,6 +32,10 @@ class FakeSession:
         return {"content": {"type": "text", "text": self.response}}
 
 
+class FakeSessionNoSampling(FakeSession):
+    supported = False
+
+
 def _image(path: Path) -> Path:
     Image.new("RGB", (96, 54), "white").save(path)
     return path
@@ -203,7 +207,7 @@ def test_generate_selects_visual_reviewer_only_when_host_declares_vision(
     assert "不支持图像输入" in captured["visual_review_reason"]
 
 
-def test_generate_prefers_direct_responses_provider_and_warns_for_text_only(
+def test_generate_falls_back_to_direct_provider_when_no_sampling(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -218,7 +222,10 @@ def test_generate_prefers_direct_responses_provider_and_warns_for_text_only(
     monkeypatch.setenv("PPT_AGENT_API_KEY", "fresh-secret")
     monkeypatch.setenv("PPT_AGENT_MODEL", "text-model")
     monkeypatch.setenv("PPT_AGENT_VISION_MODEL", "vision-model")
-    context = ToolContext(agent=object(), workspace=tmp_path, session=FakeSession("host"))
+    context = ToolContext(
+        agent=object(), workspace=tmp_path,
+        session=FakeSessionNoSampling("host"),
+    )
 
     tool_generate({"markdown": "# Report"}, context)
 

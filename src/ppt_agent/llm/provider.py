@@ -361,11 +361,20 @@ def resolve_provider(
     *,
     environ: dict[str, str] | None = None,
 ) -> tuple[LLMProvider | None, str | None]:
-    """Prefer an explicitly configured direct provider, then host Sampling."""
+    """Prefer the host's Sampling model, then a direct API provider.
+
+    The design intent is that MCP callers get *the conversation's own model*
+    by default (via ``sampling/createMessage``). A direct provider configured
+    through ``PPT_AGENT_API_*`` env vars is a fallback for hosts that do not
+    declare sampling support -- not an override.
+    """
+    host = select_provider(session)
+    if host is not None:
+        return host, None
     direct, warning = configured_provider(environ)
     if direct is not None:
         return direct, None
-    return select_provider(session), warning
+    return None, warning
 
 
 class RuleFallbackProvider:

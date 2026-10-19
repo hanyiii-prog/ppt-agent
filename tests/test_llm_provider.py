@@ -251,8 +251,8 @@ def test_provider_resolution_uses_sampling_when_direct_configuration_is_partial(
         environ={"PPT_AGENT_API_KEY": "fresh-secret"},
     )
     assert isinstance(provider, MCPSamplingProvider)
-    assert warning and "PPT_AGENT_API_BASE_URL" in warning
-    assert "fresh-secret" not in warning
+    # Host sampling wins; the partial direct config is not even attempted.
+    assert warning is None
 
 
 def test_select_provider_honesty() -> None:
