@@ -24,6 +24,7 @@ from ppt_agent.llm import (
     select_provider,
 )
 from ppt_agent.mcp.sampling import SamplingSession
+from ppt_agent.llm.provider import probe_vision_capability
 from ppt_agent.narrative_engine import build_narrative
 from ppt_agent.parsers import parse_markdown
 
@@ -301,6 +302,38 @@ def test_provider_callable_has_an_explicit_vision_only_image_path() -> None:
     ))
     with pytest.raises(LLMUnavailableError, match="vision_not_declared"):
         text_only.with_images("visual prompt", [image])
+
+
+def test_vision_probe_verifies_observable_image_understanding() -> None:
+    class ColorProvider:
+        name = "color"
+        supports_vision = True
+
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.messages = []
+
+        def chat(self, messages, **_kwargs):
+            self.messages.append(messages)
+            return self.replies.pop(0)
+
+    provider = ColorProvider(["red", "blue"])
+    assert probe_vision_capability(provider) == (True, None)
+    assert len(provider.messages) == 2
+    assert provider.messages[0][0].images
+
+    blind = ColorProvider(["cannot see", "cannot see"])
+    ok, detail = probe_vision_capability(blind)
+    assert not ok
+    assert "cannot see" in detail
+
+
+def test_vision_probe_refuses_undeclared_provider() -> None:
+    provider = NullProvider("red")
+    ok, detail = probe_vision_capability(provider)
+
+    assert not ok
+    assert detail == "provider_declares_no_vision"
 
 
 def test_sampling_session_timeout_then_retry() -> None:

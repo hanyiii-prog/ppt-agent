@@ -173,6 +173,10 @@ def test_generate_selects_visual_reviewer_only_when_host_declares_vision(
         captured.update(kwargs)
         return {"ok": True}
 
+    monkeypatch.setattr(
+        "ppt_agent.mcp.tools.probe_vision_capability",
+        lambda _provider, **_kwargs: (True, None),
+    )
     monkeypatch.setattr("ppt_agent.agent.pipeline.run_pipeline", fake_pipeline)
     session = FakeSession('{"schema":"storyboard/v1","slides":[]}')
     session.vision_supported = None
@@ -207,6 +211,35 @@ def test_generate_selects_visual_reviewer_only_when_host_declares_vision(
     assert "不支持图像输入" in captured["visual_review_reason"]
 
 
+def test_generate_rejects_declared_vision_when_probe_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_pipeline(markdown: str, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    def failed_probe(_provider, **_kwargs):
+        return False, "expected 'red', got 'cannot see'"
+
+    monkeypatch.setattr("ppt_agent.agent.pipeline.run_pipeline", fake_pipeline)
+    monkeypatch.setattr(
+        "ppt_agent.mcp.tools.probe_vision_capability",
+        failed_probe,
+    )
+    session = FakeSession('{"schema":"storyboard/v1","slides":[]}')
+    session.vision_supported = True
+    context = ToolContext(agent=object(), workspace=tmp_path, session=session)
+
+    tool_generate({"markdown": "# Report"}, context)
+
+    assert captured["visual_critic"] is None
+    assert "视觉能力探测未通过" in captured["visual_review_reason"]
+    assert "cannot see" in captured["visual_review_reason"]
+
+
 def test_generate_falls_back_to_direct_provider_when_no_sampling(
     tmp_path: Path,
     monkeypatch,
@@ -217,6 +250,10 @@ def test_generate_falls_back_to_direct_provider_when_no_sampling(
         captured.update(kwargs)
         return {"metadata": {}}
 
+    monkeypatch.setattr(
+        "ppt_agent.mcp.tools.probe_vision_capability",
+        lambda _provider, **_kwargs: (True, None),
+    )
     monkeypatch.setattr("ppt_agent.agent.pipeline.run_pipeline", fake_pipeline)
     monkeypatch.setenv("PPT_AGENT_API_BASE_URL", "https://api.example/v1/responses")
     monkeypatch.setenv("PPT_AGENT_API_KEY", "fresh-secret")

@@ -8,7 +8,9 @@ from ppt_agent.agent.pipeline import (
     _detect_content_kit,
     _diversify_kits,
     _coerce_design_plan,
+    _plan_to_clone_pages,
 )
+from ppt_agent.parsers import parse_markdown
 
 
 class TestAdaptiveFontSize:
@@ -46,6 +48,195 @@ class TestDetectContentKit:
     def test_no_match_returns_none(self):
         texts = ["顶层指导方针", "以点带面跑通试点"]
         assert _detect_content_kit(texts) is None
+
+    def test_comparison_requires_explicit_marker(self):
+        texts = [
+            "先讲边界，再讲动作：先明确合同、任务单、付款、工期和验收的边界。",
+            "每个要求都落到证据：说明谁负责、何时完成、在哪里记录。",
+            "区分制度与建议：历史文件与复盘材料只作补充。",
+            "先识别适用范围：不同版本的适用范围存在差异。",
+        ]
+        assert _detect_content_kit(texts) is None
+
+
+class TestVisualKitSelection:
+    def test_visual_form_routes_comparison_to_two_panels(self):
+        document = parse_markdown(
+            "# Comparison\n\n"
+            "- Current：Manual handoff creates delay\n"
+            "- Proposal：Automated review creates traceability\n"
+        )
+        bullet = next(block for block in document.blocks if block.type == "bullets")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Before and after",
+                "source_blocks": [bullet.id],
+                "visual_form": "左右对比",
+            }],
+        }, document)
+
+        assert pages[0]["kit"] == "two_panel_list"
+        assert pages[0]["left"]["rows"]
+        assert pages[0]["right"]["rows"]
+
+    def test_visual_form_routes_timeline_to_progress_timeline(self):
+        document = parse_markdown(
+            "# Rollout\n\n"
+            "- 9月10日：专题会议\n"
+            "- 9月20日：数据接入\n"
+            "- 9月30日：上线验证\n"
+        )
+        bullet = next(block for block in document.blocks if block.type == "bullets")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Rollout schedule",
+                "source_blocks": [bullet.id],
+                "visual_form": "时间轴推进",
+            }],
+        }, document)
+
+        assert pages[0]["kit"] == "progress_timeline"
+        assert pages[0]["steps"][0]["date"] == "9月10日"
+
+    def test_visual_form_routes_matrix_to_editable_table(self):
+        document = parse_markdown(
+            "# Requirements\n\n"
+            "| Capability | Phase | Owner |\n| --- | --- | --- |\n"
+            "| Intake | P1 | Product |\n"
+            "| Reporting | P2 | Analytics |\n"
+            "| Audit | P2 | Security |\n"
+        )
+        table = next(block for block in document.blocks if block.type == "table")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Requirements matrix",
+                "source_blocks": [table.id],
+                "visual_form": "矩阵表格",
+            }],
+        }, document)
+
+        assert pages[0]["kit"] == "matrix_table"
+        assert pages[0]["table"]["headers"] == ["Capability", "Phase", "Owner"]
+        assert pages[0]["table"]["rows"][0] == ["Intake", "P1", "Product"]
+
+    def test_table_page_semantics_select_matrix_table_without_request(self):
+        document = parse_markdown(
+            "# Requirements\n\n"
+            "| Capability | Phase | Owner |\n| --- | --- | --- |\n"
+            "| Intake | P1 | Product |\n"
+            "| Reporting | P2 | Analytics |\n"
+            "| Audit | P2 | Security |\n"
+        )
+        table = next(block for block in document.blocks if block.type == "table")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Requirements matrix",
+                "source_blocks": [table.id],
+                "archetype": {"archetype": "table_page"},
+            }],
+        }, document)
+
+        assert pages[0]["kit"] == "matrix_table"
+        assert pages[0]["table"]["headers"] == ["Capability", "Phase", "Owner"]
+
+    def test_large_table_page_splits_into_editable_matrix_tables(self):
+        rows = "".join(f"| Item {i} | P1 | Owner {i} |\n" for i in range(1, 13))
+        document = parse_markdown(
+            "# Requirements\n\n"
+            "| Capability | Phase | Owner |\n| --- | --- | --- |\n" + rows
+        )
+        table = next(block for block in document.blocks if block.type == "table")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Requirements matrix",
+                "source_blocks": [table.id],
+                "archetype": {"archetype": "table_page"},
+            }],
+        }, document)
+
+        assert [page["kit"] for page in pages] == ["matrix_table", "matrix_table"]
+        assert pages[0]["title"].endswith("（1/2）")
+        assert pages[1]["title"].endswith("（2/2）")
+        assert len(pages[0]["table"]["rows"]) == 10
+        assert len(pages[1]["table"]["rows"]) == 2
+        assert pages[1]["table"]["rows"][0] == ["Item 11", "P1", "Owner 11"]
+
+    def test_architecture_semantics_select_layers_without_explicit_kit(self):
+        document = parse_markdown(
+            "# Platform\n\n## Architecture\n\n"
+            "| Layer | Component | Purpose |\n| --- | --- | --- |\n"
+            "| Data | Lakehouse | Stores source data |\n"
+            "| Model | Feature service | Serves shared features |\n"
+            "| App | Research portal | Supports researchers |\n"
+        )
+        table = next(block for block in document.blocks if block.type == "table")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Platform architecture",
+                "source_blocks": [table.id],
+                "archetype": {"archetype": "architecture"},
+            }],
+        }, document)
+
+        assert pages[0]["kit"] == "architecture_layers"
+
+    def test_storyboard_architecture_kit_builds_editable_layers(self):
+        document = parse_markdown(
+            "# Platform\n\n## Architecture\n\n"
+            "| Layer | Component | Purpose |\n| --- | --- | --- |\n"
+            "| Data | Lakehouse | Stores source data |\n"
+            "| Model | Feature service | Serves shared features |\n"
+            "| App | Research portal | Supports researchers |\n"
+        )
+        table = next(block for block in document.blocks if block.type == "table")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Platform architecture",
+                "source_blocks": [table.id],
+                "archetype": {"archetype": "architecture"},
+                "visual_kit": "architecture_layers",
+            }],
+        }, document)
+
+        assert pages[0]["kit"] == "architecture_layers"
+        assert [layer["head"] for layer in pages[0]["layers"]] == [
+            "Data", "Model", "App",
+        ]
+        assert pages[0]["layers"][1]["desc"] == "Feature service；Serves shared features"
+
+    def test_responsibility_table_uses_role_cards_when_explicitly_selected(self):
+        document = parse_markdown(
+            "# Delivery\n\n## Responsibilities\n\n"
+            "| Role | Owner | Duties |\n| --- | --- | --- |\n"
+            "| Product | Team A | Prioritize roadmap |\n"
+            "| Design | Team B | Define workflows |\n"
+            "| Engineering | Team C | Build platform |\n"
+            "| Operations | Team D | Run service |\n"
+        )
+        table = next(block for block in document.blocks if block.type == "table")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Responsibilities",
+                "source_blocks": [table.id],
+                "archetype": {"archetype": "responsibility"},
+                "visual_kit": "four_role_cards",
+            }],
+        }, document)
+
+        assert pages[0]["kit"] == "four_role_cards"
+        assert [card["name"] for card in pages[0]["cards"]] == [
+            "Product", "Design", "Engineering", "Operations",
+        ]
+        assert pages[0]["cards"][0]["role"] == ""
+        assert pages[0]["cards"][0]["duties"] == ["Owner: Team A", "Duties: Prioritize roadmap"]
 
 
 class TestKitDiversity:

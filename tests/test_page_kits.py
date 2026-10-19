@@ -58,6 +58,19 @@ def test_four_role_cards_builds_cards_and_note(content_slide):
     assert not [i for i in audit_pages(prs) if i["kind"] == "overflow"]
 
 
+def test_matrix_table_skips_blank_rows(content_slide):
+    prs, sl = content_slide
+    K.matrix_table(sl, {
+        "headers": ["Capability", "Phase"],
+        "rows": [["Intake", "P1"], ["", ""], ["Reporting", "P2"]],
+    }, title="Requirements", lead="Matrix")
+
+    tables = [shape for shape in sl.shapes if shape.has_table]
+    assert len(tables) == 1
+    assert tables[0].table.cell(1, 0).text == "Intake"
+    assert tables[0].table.cell(2, 0).text == "Reporting"
+
+
 def test_org_chart_builds_nodes_and_depts(content_slide):
     prs, sl = content_slide
     groups = {"left": {"label": "院方工作组", "chip_head": "信息科", "chip_body": "统筹"},

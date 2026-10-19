@@ -469,3 +469,63 @@ class ProviderLLMFunction:
 def llm_fn_from_provider(provider: LLMProvider) -> ProviderLLMFunction:
     """Adapt a provider to text and explicitly supported multimodal calls."""
     return ProviderLLMFunction(provider)
+
+
+# --- vision capability probe ------------------------------------------------
+# A declared capability is not a working capability: the probe sends a known
+# image and verifies the answer, so a text-only model behind a vision config
+# fails loudly here instead of silently degrading the aesthetic pipeline.
+
+_PROBE_SIZE = 48  # px square; tiny on purpose -- cheap and fast
+
+
+def _probe_image(color: tuple[int, int, int]) -> ImageAttachment:
+    import io as _io
+
+    from PIL import Image as _Image
+
+    img = _Image.new("RGB", (_PROBE_SIZE, _PROBE_SIZE), color)
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+    return ImageAttachment(data=buf.getvalue(), mime_type="image/png")
+
+
+def probe_vision_capability(
+    provider: LLMProvider,
+    *,
+    attempts: int = 2,
+) -> tuple[bool, str | None]:
+    """Actively verify that ``provider`` can actually see images.
+
+    Sends a solid-colour test image and checks the answer. Returns
+    ``(ok, detail)``. ``ok`` is True only when the model answers correctly
+    on at least one of ``attempts`` rounds with different colours, which
+    rules out a text-only model that echoes a canned phrase.
+    """
+    llm = llm_fn_from_provider(provider)
+    if not llm.supports_vision:
+        return False, "provider_declares_no_vision"
+    cases = [((224, 27, 33), "red"), ((20, 90, 200), "blue")]
+    colors = cases[: max(1, int(attempts))]
+    answered_any = False
+    last_error: str | None = None
+    for rgb, expected in colors:
+        try:
+            reply = llm.with_images(
+                "这张图片是什么颜色？请只回答颜色英文名，如 red/blue/green。",
+                [_probe_image(rgb)],
+            )
+        except LLMUnavailableError as exc:
+            last_error = str(exc)
+            continue
+        except Exception as exc:  # noqa: BLE001 -- probe must not crash the pipeline
+            last_error = f"{type(exc).__name__}: {exc}"
+            continue
+        text = (reply or "").strip().lower()
+        if expected in text:
+            answered_any = True
+        else:
+            last_error = f"expected {expected!r}, got {text[:80]!r}"
+    if answered_any:
+        return True, None
+    return False, last_error or "vision_probe_failed"

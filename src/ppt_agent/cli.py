@@ -421,14 +421,21 @@ def main() -> int:
             from .agent.pipeline import run_pipeline
             if not args.source:
                 raise SystemExit("clone route requires a Markdown source")
-            from .llm.provider import llm_fn_from_provider, resolve_provider
+            from .llm.provider import llm_fn_from_provider, probe_vision_capability, resolve_provider
             provider, provider_warning = resolve_provider(None)
             llm_fn = llm_fn_from_provider(provider) if provider is not None else None
             visual_critic = None
             if provider is not None and getattr(provider, "supports_vision", False):
-                from .visual_critic import ModelVisualCritic
-                visual_critic = ModelVisualCritic(provider)
-                visual_review_reason = None
+                vision_ok, vision_detail = probe_vision_capability(provider)
+                if vision_ok:
+                    from .visual_critic import ModelVisualCritic
+                    visual_critic = ModelVisualCritic(provider)
+                    visual_review_reason = None
+                else:
+                    visual_review_reason = (
+                        "模型虽声明支持图像输入，但视觉能力探测未通过；"
+                        f"Agent 不会发送页面截图。原因：{vision_detail}"
+                    )
             elif provider is None:
                 visual_review_reason = (
                     f"{provider_warning} " if provider_warning else ""

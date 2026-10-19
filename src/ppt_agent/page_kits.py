@@ -801,6 +801,72 @@ def column_cards(slide, cards, *, cols=None, title="", lead=None, prs=None,
     return top
 
 
+# --- kit: native editable matrix table ---------------------------------------
+def matrix_table(slide, table, note=None, *, title="", lead=None, prs=None):
+    """Render a compact, editable table for genuine matrix/tabular evidence."""
+    top = content_header(slide, title, lead, prs=prs)
+    headers = [str(cell or "") for cell in (table or {}).get("headers") or []]
+    source_rows = (table or {}).get("rows") or []
+    if not headers and source_rows:
+        headers = [f"项目 {index + 1}" for index in range(len(source_rows[0]))]
+    rows = [[str(cell or "") for cell in row] for row in source_rows if any(row)]
+    if not headers or not rows:
+        return top
+
+    width = 13.333 - 2 * M
+    available_h = BOT - top - (NOTE_H + 0.18 if note else 0.18)
+    height = min(available_h, max(1.1, 0.35 * (len(rows) + 1)))
+    shape = slide.shapes.add_table(
+        len(rows) + 1, len(headers), Inches(M), Inches(top),
+        Inches(width), Inches(height),
+    )
+    native = shape.table
+    for column in native.columns:
+        column.width = Inches(width / len(headers))
+    native.rows[0].height = Inches(min(0.44, height * 0.22))
+
+    for col, value in enumerate(headers):
+        cell = native.cell(0, col)
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = RGBColor.from_string(P)
+        cell.margin_left = Inches(0.08)
+        cell.margin_right = Inches(0.08)
+        cell.margin_top = Inches(0.04)
+        cell.margin_bottom = Inches(0.04)
+        frame = cell.text_frame
+        frame.word_wrap = True
+        frame.text = value
+        for run in frame.paragraphs[0].runs:
+            run.font.name = FONT
+            run.font.size = Pt(10.5)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor.from_string(WHITE)
+
+    for row_no, values in enumerate(rows, start=1):
+        native.rows[row_no].height = Inches(max(0.30, (height - 0.44) / len(rows)))
+        for col in range(len(headers)):
+            value = values[col] if col < len(values) else ""
+            cell = native.cell(row_no, col)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = RGBColor.from_string(
+                "FFFFFF" if row_no % 2 else PS,
+            )
+            cell.margin_left = Inches(0.08)
+            cell.margin_right = Inches(0.08)
+            cell.margin_top = Inches(0.03)
+            cell.margin_bottom = Inches(0.03)
+            frame = cell.text_frame
+            frame.word_wrap = True
+            frame.text = value
+            for run in frame.paragraphs[0].runs:
+                run.font.name = FONT
+                run.font.size = Pt(9.5)
+                run.font.color.rgb = RGBColor.from_string(TXT)
+    if note:
+        _note_bar(slide, note)
+    return top
+
+
 # --- kit: layered architecture ------------------------------------------------
 def architecture_layers(slide, layers, side=None, *, title="", lead=None, prs=None):
     """Render an editable layered architecture with an optional side legend.

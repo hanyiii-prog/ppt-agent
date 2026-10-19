@@ -14,6 +14,16 @@ from .page_archetype import ARCHETYPES, select_archetype
 SCHEMA = "storyboard/v1"
 _KINDS = frozenset({"cover", "toc", "section", "content", "closing"})
 _LAYOUT_VARIANTS = frozenset({"standard", "split", "wide", "grid", "compact"})
+_VISUAL_KITS = frozenset({
+    "quad_cards",
+    "column_cards",
+    "two_panel_list",
+    "stage_cards",
+    "progress_timeline",
+    "stage_timeline",
+    "architecture_layers",
+    "four_role_cards",
+})
 _HEX = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
 _DEFAULT_PALETTE = {
@@ -124,6 +134,11 @@ def normalize_storyboard(
             raise StoryboardValidationError(
                 f"slides[{index - 1}] has unsupported layout_variant {layout_variant!r}"
             )
+        visual_kit = str(entry.get("visual_kit") or "").strip().lower()
+        if visual_kit and visual_kit not in _VISUAL_KITS:
+            raise StoryboardValidationError(
+                f"slides[{index - 1}] has unsupported visual_kit {visual_kit!r}"
+            )
         evidence_ids = _string_list(entry.get("evidence_ids"))
         unknown_evidence = [evidence_id for evidence_id in evidence_ids if evidence_id not in source_ids]
         if unknown_evidence:
@@ -137,6 +152,7 @@ def normalize_storyboard(
             "source_blocks": refs,
             "key_message": str(entry.get("key_message") or "").strip(),
             "visual_form": str(entry.get("visual_form") or "").strip(),
+            "visual_kit": visual_kit,
             "archetype_name": archetype,
             "layout_variant": layout_variant,
             "evidence_ids": evidence_ids or refs,
@@ -228,6 +244,7 @@ def storyboard_to_plan(
             "source_blocks": list(slide["source_blocks"]),
             "key_message": slide.get("key_message") or "",
             "visual_form": slide.get("visual_form") or "",
+            "visual_kit": slide.get("visual_kit") or "",
             "layout_variant": slide.get("layout_variant") or "standard",
             "evidence_ids": list(slide.get("evidence_ids") or []),
             "speaker_notes": slide.get("speaker_notes"),
@@ -357,6 +374,7 @@ def repair_storyboard_plan(
                 archetype.get("archetype") if isinstance(archetype, dict) else None
             ),
             "current_layout_variant": page.get("layout_variant") or "standard",
+            "current_visual_kit": page.get("visual_kit") or "",
             "source_blocks": sources,
             "findings": blocking[page_no],
         })
@@ -370,7 +388,9 @@ def repair_storyboard_plan(
         '{"schema":"storyboard-repair/v1","repairs":[{"page_no":2,'
         '"archetype":"title_bullets|cards_grid|metrics_row|table_page|timeline|'
         'comparison|narrative|quote_strip","layout_variant":"standard|split|wide|'
-        'grid|compact","visual_form":"不超过120字的构图说明"}]}。\n'
+        'grid|compact","visual_kit":"quad_cards|column_cards|two_panel_list|'
+        'stage_cards|progress_timeline|stage_timeline|architecture_layers|'
+        'four_role_cards","visual_form":"不超过120字的构图说明"}]}。\n'
         "仅返回 findings 对应的 content 页面。不得返回其他字段或页面。\n"
         f"允许 archetype：{json.dumps(list(ARCHETYPES), ensure_ascii=False)}\n"
         f"页面与质检证据：{json.dumps(page_payloads, ensure_ascii=False, separators=(',', ':'))}"
@@ -406,7 +426,9 @@ def repair_storyboard_plan(
     returned: set[int] = set()
     applied: list[int] = []
     rejected = 0
-    allowed_keys = {"page_no", "archetype", "layout_variant", "visual_form"}
+    allowed_keys = {
+        "page_no", "archetype", "layout_variant", "visual_kit", "visual_form",
+    }
 
     for item in repairs:
         if not isinstance(item, dict):
@@ -421,6 +443,10 @@ def repair_storyboard_plan(
             or page_no in returned
             or item.get("archetype") not in ARCHETYPES
             or item.get("layout_variant") not in _LAYOUT_VARIANTS
+            or (
+                "visual_kit" in item
+                and item["visual_kit"] not in _VISUAL_KITS
+            )
             or (
                 "visual_form" in item
                 and (
@@ -439,6 +465,10 @@ def repair_storyboard_plan(
             previous_name != item["archetype"]
             or (page.get("layout_variant") or "standard") != item["layout_variant"]
             or (
+                "visual_kit" in item
+                and page.get("visual_kit", "") != item["visual_kit"]
+            )
+            or (
                 "visual_form" in item
                 and page.get("visual_form", "") != item["visual_form"]
             )
@@ -452,6 +482,8 @@ def repair_storyboard_plan(
             "reason": "selected in response to a blocking quality finding",
         }
         page["layout_variant"] = item["layout_variant"]
+        if "visual_kit" in item:
+            page["visual_kit"] = item["visual_kit"]
         if "visual_form" in item:
             page["visual_form"] = item["visual_form"]
         applied.append(page_no)
@@ -490,12 +522,18 @@ def _build_prompt(document: ContentDocument, constraints: dict[str, Any]) -> str
         '"muted":"RRGGBB","inverse":"RRGGBB"}},"slides":[{"kind":"cover|toc|section|content|closing",'
         '"title":"...","key_message":"...","source_block_ids":["原始 block id"],"visual_form":"...","archetype":'
         '"title_bullets|cards_grid|metrics_row|table_page|timeline|comparison|narrative|quote_strip",'
-        '"layout_variant":"standard|split|wide|grid|compact","evidence_ids":["source block ID"],'
+        '"layout_variant":"standard|split|wide|grid|compact","visual_kit":"可选原生组件",'
+        '"evidence_ids":["source block ID"],'
         '"speaker_notes":"..."}],"omitted_source_blocks":[{"id":"...","reason":"..."}]}.\n'
         "每个原始 block ID 必须至少出现在一个页面的 source_block_ids 中；确需删去的内容必须逐项列在 "
         "omitted_source_blocks 并解释原因。页面标题可以提炼，但其依据要包含在 source_block_ids 中。"
         "evidence_ids（若提供）必须与来源 block ID 完全一致。max_pages 是硬上限。"
         "palette 必须满足文本对比度。逐页选择 layout_variant；内容结构不同就不要重复同一种构图。\n"
+        "content 页面可选 visual_kit，必须依据来源内容和数量选择，不适配时省略。"
+        "组件：quad_cards（2-4个要点）、column_cards（多组内容）、two_panel_list（两侧比较）、"
+        "stage_cards（2-4个阶段）、progress_timeline（2-8个节点）、stage_timeline（2-4个阶段）、"
+        "matrix_table（2-10行通用表）、architecture_layers（3-8行架构表）、four_role_cards（3-5行职责表）。"
+        "架构/职责表优先用对应原生可编辑图示；不得把无层级数据伪造成组织图。\n"
         f"用户任务约束：{json.dumps(constraints, ensure_ascii=False, separators=(',', ':'))}\n"
         f"文档标题：{document.title or ''}\n"
         f"来源内容块：{json.dumps(blocks, ensure_ascii=False, separators=(',', ':'))}"

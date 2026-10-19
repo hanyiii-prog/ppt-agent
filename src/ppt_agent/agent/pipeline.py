@@ -250,6 +250,7 @@ def _sync_storyboard_layout(
             slide["archetype_name"] = archetype.get("archetype") or ""
         slide["layout_variant"] = page.get("layout_variant") or "standard"
         slide["visual_form"] = page.get("visual_form") or ""
+        slide["visual_kit"] = page.get("visual_kit") or ""
 
 
 # ---- intelligent condensation ---------------------------------------------
@@ -445,7 +446,7 @@ def _archetype_to_kit(archetype: str, item_count: int, rotation: int = 0) -> str
 _LAYER_RE = re.compile(r"第[一二三四五六七八九十\d]{1,3}层|[四五六七八]层架构|五层|分层架构|技术架构", re.UNICODE)
 _TIMELINE_RE = re.compile(r"\d{1,2}月|\d{1,2}日|时间|节点|阶段|步骤|第[一二三四五]步|日程", re.UNICODE)
 _NUMERIC_RE = re.compile(r"\d+(\.\d+)?\s*[%％]|共\s*\d+|合计\s*\d+|达到\s*\d+", re.UNICODE)
-_COMPARE_RE = re.compile(r"对比|相比|vs|VS|差异|优劣|现状.*方案|before.*after", re.UNICODE)
+_COMPARE_RE = re.compile(r"对比|对照|相比|相较|vs|VS|versus|优劣|before.*after", re.UNICODE)
 
 
 def _detect_content_kit(texts: list[str]) -> str | None:
@@ -687,22 +688,46 @@ def _blocks_to_steps(blocks: list) -> list[dict[str, Any]]:
     return steps
 
 
-def _blocks_to_two_panel(blocks: list) -> tuple[dict, dict]:
+def _blocks_to_two_panel(blocks: list, *, visual_form: str = "") -> tuple[dict, dict]:
     """Format for two_panel_list: {title, rows: [[head, desc], ...]}"""
     left = {"title": "现状", "rows": []}
     right = {"title": "方案", "rows": []}
     target = left
+
+    def append(item: str, target: dict) -> None:
+        parts = item.split("：", 1) if "：" in item else item.split(":", 1)
+        head = parts[0].strip()[:10] if len(parts) > 1 else item[:10]
+        desc = parts[1].strip() if len(parts) > 1 else item
+        target["rows"].append([head, desc])
+
     for block in blocks:
         text = block.text or ""
         items = block.items if block.type in ("bullets", "ordered") else [text]
+        if (
+            re.search(r"左右|对比|对照", str(visual_form or ""), re.IGNORECASE)
+            and len(items) >= 2
+        ):
+            half = (len(items) + 1) // 2
+            for item in items[:half]:
+                append(item, left)
+            for item in items[half:]:
+                append(item, right)
+            continue
         for item in items:
-            if "vs" in item.lower() or "对比" in item or "相较" in item or "方案" in item:
+            switch_text = item.lower()
+            if (
+                "vs" in switch_text
+                or "对比" in item
+                or "相较" in item
+                or "方案" in item
+                or "proposal" in switch_text
+                or re.search(r"(after|right|右|目标)", switch_text)
+                or re.search(r"左右|对比|对照", str(visual_form or ""), re.IGNORECASE)
+                and len(left["rows"]) > 0 and len(right["rows"]) == 0
+            ):
                 target = right
                 continue
-            parts = item.split("：", 1) if "：" in item else item.split(":", 1)
-            head = parts[0].strip()[:10] if len(parts) > 1 else item[:10]
-            desc = parts[1].strip() if len(parts) > 1 else item
-            target["rows"].append([head, desc])
+            append(item, target)
     return left, right
 
 
@@ -736,9 +761,80 @@ def _blocks_to_stages(blocks: list, *, page_title: str = "") -> list[dict[str, s
     return stages
 
 
+def _blocks_to_architecture_layers(blocks: list) -> list[dict[str, str]]:
+    """Format table rows as editable architecture layers."""
+    layers: list[dict[str, str]] = []
+    for block in blocks:
+        if block.type == "table":
+            for row in block.rows:
+                values = [cell.strip() for cell in row if cell and cell.strip()]
+                if not values:
+                    continue
+                layers.append({
+                    "head": values[0][:18],
+                    "desc": "；".join(values[1:])[:180],
+                    "level": len(layers) + 1,
+                })
+    return layers
+
+
+def _blocks_to_role_cards(blocks: list) -> list[dict[str, Any]]:
+    """Format a responsibility table as editable role cards.
+
+    The first cell names the role. Remaining cells retain their table-header
+    labels so ownership and duties remain traceable after layout conversion.
+    """
+    cards: list[dict[str, Any]] = []
+    for block in blocks:
+        if block.type != "table":
+            continue
+        headers = [str(cell or "").strip() for cell in (block.headers or [])]
+        for row in block.rows:
+            values = [str(cell or "").strip() for cell in row]
+            if not any(values):
+                continue
+            name = values[0][:24] if values else ""
+            duties = []
+            for index, value in enumerate(values[1:], start=1):
+                if not value:
+                    continue
+                label = headers[index] if index < len(headers) and headers[index] else "说明"
+                duties.append(f"{label}: {value}")
+            cards.append({
+                "name": name,
+                "sub": "",
+                "role": "",
+                "duties": duties,
+            })
+    return cards
+
+
+def _blocks_to_matrix_table(blocks: list) -> dict[str, list[list[str]]]:
+    """Keep genuine table evidence as a native editable table contract."""
+    headers: list[str] = []
+    rows: list[list[str]] = []
+    for block in blocks:
+        if block.type != "table":
+            continue
+        headers = [str(cell or "").strip() for cell in (block.headers or [])]
+        rows = [[str(cell or "").strip() for cell in row] for row in block.rows]
+        break
+    if rows and not headers:
+        headers = [f"项目 {index + 1}" for index in range(len(rows[0]))]
+    return {"headers": headers, "rows": rows}
+
+
 _DATE_RE = re.compile(
     r"(20\d{2})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*[日号])?"
     r"|(?<!\d)(20\d{2})[./-](\d{1,2})(?:[./-](\d{1,2}))?"
+)
+
+_VISUAL_FORM_RULES: tuple[tuple[str, str], ...] = (
+    ("matrix_table", r"矩阵|表格|table|matrix"),
+    ("two_panel_list", r"左右|对比|对照|before.*after|versus"),
+    ("progress_timeline", r"时间线|时间轴|进度|节点|timeline"),
+    ("stage_cards", r"阶段|步骤|推进|流程|stage"),
+    ("quad_cards", r"四象限|指标|数据|kpi|metric"),
 )
 
 
@@ -780,6 +876,59 @@ def _page_item_count(blocks: list[Any]) -> int:
     return total
 
 
+def _visual_kit_fits(kit: str, blocks: list[Any]) -> bool:
+    """Reject kits whose native geometry cannot carry the source item count."""
+    count = _page_item_count(blocks)
+    if kit == "architecture_layers":
+        return any(block.type == "table" for block in blocks) and 3 <= count <= 8
+    if kit == "four_role_cards":
+        return any(block.type == "table" for block in blocks) and 3 <= count <= 5
+    if kit == "matrix_table":
+        table = next((block for block in blocks if block.type == "table"), None)
+        return (
+            table is not None
+            and len(table.headers) >= 2
+            and 2 <= len(table.rows) <= 10
+        )
+    if kit == "quad_cards":
+        return 2 <= count <= 4
+    if kit == "two_panel_list":
+        return count >= 2
+    if kit in ("stage_cards", "stage_timeline"):
+        return 2 <= count <= 4
+    if kit == "progress_timeline":
+        return 2 <= count <= 8
+    return kit == "column_cards"
+
+
+def _visual_form_to_kit(visual_form: str, blocks: list[Any]) -> str | None:
+    """Translate a storyboard's free-text composition intent into a kit.
+
+    The match is intentionally conservative: if the requested form does not
+    fit the source, the normal semantic/fallback routing still runs.
+    """
+    text = str(visual_form or "").strip().lower()
+    if not text:
+        return None
+    for kit, pattern in _VISUAL_FORM_RULES:
+        if re.search(pattern, text, flags=re.IGNORECASE) and _visual_kit_fits(kit, blocks):
+            return kit
+    return None
+
+
+def _semantic_visual_kit(archetype: str, blocks: list[Any]) -> str | None:
+    """Prefer a domain-specific editable diagram when the source supports it."""
+    if archetype == "table_page":
+        table = next((block for block in blocks if block.type == "table"), None)
+        if table is not None and len(table.headers) >= 2 and len(table.rows) >= 2:
+            return "matrix_table"
+    if archetype == "architecture" and _visual_kit_fits("architecture_layers", blocks):
+        return "architecture_layers"
+    if archetype == "responsibility" and _visual_kit_fits("four_role_cards", blocks):
+        return "four_role_cards"
+    return None
+
+
 def _coerce_design_plan(plan):
     """Accept either a raw page list or a ``{deck, meta, pages}`` envelope."""
     if isinstance(plan, list):
@@ -793,13 +942,15 @@ def _coerce_design_plan(plan):
 
 _CONTENT_KITS: frozenset[str] = frozenset({
     "quad_cards", "column_cards", "two_panel_list", "stage_cards",
-    "progress_timeline", "stage_timeline", "org_chart",
+    "progress_timeline", "stage_timeline", "org_chart", "matrix_table",
+    "architecture_layers", "four_role_cards",
 })
 _KIT_ALTERNATIVES: dict[str, list[str]] = {
     "quad_cards": ["column_cards", "stage_cards", "two_panel_list"],
     "two_panel_list": ["column_cards", "quad_cards", "stage_cards"],
     "column_cards": ["quad_cards", "two_panel_list", "stage_cards"],
     "stage_cards": ["quad_cards", "column_cards"],
+    "matrix_table": ["column_cards", "quad_cards"],
 }
 
 
@@ -905,15 +1056,25 @@ def _plan_to_clone_pages(
             for b in blocks:
                 if b.type in ("bullets", "ordered"):
                     block_texts.extend(b.items or [])
-            detected = _detect_content_kit(block_texts)
-            if detected:
-                kit = detected
+            requested_kit = str(page.get("visual_kit") or "").strip()
+            visual_form_kit = _visual_form_to_kit(page.get("visual_form") or "", blocks)
+            if requested_kit and _visual_kit_fits(requested_kit, blocks):
+                kit = requested_kit
+            elif visual_form_kit:
+                kit = visual_form_kit
             else:
-                kit = _archetype_to_kit(
-                    archetype,
-                    _page_item_count(blocks),
-                    rotation=_content_rotation,
-                )
+                semantic_kit = _semantic_visual_kit(archetype, blocks)
+                detected = _detect_content_kit(block_texts)
+                if semantic_kit:
+                    kit = semantic_kit
+                elif detected:
+                    kit = detected
+                else:
+                    kit = _archetype_to_kit(
+                        archetype,
+                        _page_item_count(blocks),
+                        rotation=_content_rotation,
+                    )
             _content_rotation += 1
             page_title = page.get("title") or ""
             # filter out blocks whose text matches the page title (avoids
@@ -950,7 +1111,7 @@ def _plan_to_clone_pages(
             elif kit == "progress_timeline":
                 spec["steps"] = _blocks_to_steps(blocks)
             elif kit == "two_panel_list":
-                left, right = _blocks_to_two_panel(blocks)
+                left, right = _blocks_to_two_panel(blocks, visual_form=page.get("visual_form") or "")
                 spec["left"] = left
                 spec["right"] = right
             elif kit == "stage_cards":
@@ -964,6 +1125,33 @@ def _plan_to_clone_pages(
                      "strong": False}
                     for s in stages_raw
                 ]
+            elif kit == "architecture_layers":
+                spec["layers"] = _blocks_to_architecture_layers(blocks)
+            elif kit == "four_role_cards":
+                spec["cards"] = _blocks_to_role_cards(blocks)
+            elif kit == "matrix_table":
+                table_contract = _blocks_to_matrix_table(blocks)
+                row_chunks = [
+                    table_contract["rows"][start:start + 10]
+                    for start in range(0, len(table_contract["rows"]), 10)
+                ] or [[]]
+                if len(row_chunks) == 1:
+                    spec["table"] = {"headers": table_contract["headers"], "rows": row_chunks[0]}
+                    pages.append(spec)
+                else:
+                    for chunk_no, rows_chunk in enumerate(row_chunks, start=1):
+                        spec = {
+                            "role": "content",
+                            "kit": kit,
+                            "title": f"{page_title}（{chunk_no}/{len(row_chunks)}）",
+                            "lead": lead_text or None,
+                            "table": {
+                                "headers": table_contract["headers"],
+                                "rows": rows_chunk,
+                            },
+                        }
+                        pages.append(spec)
+                    continue
             else:
                 spec["cards"] = _blocks_to_column_cards(blocks, page_title=page_title)
             pages.append(spec)

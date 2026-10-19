@@ -52,6 +52,7 @@ def test_storyboard_preserves_order_sources_and_design_intent() -> None:
                 ],
                 "archetype": "metrics_row",
                 "visual_form": "A compact metric comparison",
+                "visual_kit": "quad_cards",
             },
             {
                 "kind": "closing",
@@ -79,6 +80,7 @@ def test_storyboard_preserves_order_sources_and_design_intent() -> None:
     ]
     assert plan["pages"][1]["archetype"]["archetype"] == "metrics_row"
     assert plan["pages"][1]["key_message"] == "The rollout has reached most pilot sites."
+    assert plan["pages"][1]["visual_kit"] == "quad_cards"
     assert storyboard["design_profile"]["visual_direction"].startswith("bright editorial")
 
 

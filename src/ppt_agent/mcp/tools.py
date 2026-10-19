@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from ..adapters import create_adapter
 from ..contracts import contract_descriptor
+from ..llm.provider import probe_vision_capability
 from ..ir import Presentation
 from ..sdk import PptAgent
 from .protocol import INVALID_PARAMS, JsonRpcError
@@ -550,8 +551,15 @@ def tool_generate(arguments: dict[str, Any], context: ToolContext) -> dict[str, 
     llm_fn = llm_fn_from_provider(provider) if provider is not None else None
     visual_critic = None
     if provider is not None and getattr(provider, "supports_vision", False):
-        visual_critic = ModelVisualCritic(provider)
-        visual_review_reason = None
+        vision_ok, vision_detail = probe_vision_capability(provider)
+        if vision_ok:
+            visual_critic = ModelVisualCritic(provider)
+            visual_review_reason = None
+        else:
+            visual_review_reason = (
+                "模型虽声明支持图像输入，但视觉能力探测未通过；"
+                f"Agent 不会发送页面截图。原因：{vision_detail}"
+            )
     elif provider is None:
         visual_review_reason = (
             f"{provider_warning} " if provider_warning else ""
