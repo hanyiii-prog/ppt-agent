@@ -444,17 +444,24 @@ _COMPARE_RE = re.compile(r"对比|相比|vs|VS|差异|优劣|现状.*方案|befo
 
 
 def _detect_content_kit(texts: list[str]) -> str | None:
-    """Detect content features and return the best-matching kit, or None."""
+    """Detect content features and return the best-matching kit, or None.
+
+    Each kit has an item-count guard: ``stage_cards`` (horizontal arrows)
+    only fits 3-5 stages, ``progress_timeline`` (dated rows) only fits 3-6.
+    Oversized content falls through to the archetype rotation rather than
+    being crammed into an unreadable layout.
+    """
     joined = "\n".join(t for t in texts if t)
+    n = len(texts)
     layer_matches = _LAYER_RE.findall(joined)
-    if len(layer_matches) >= 2 and len(texts) >= 3:
+    if len(layer_matches) >= 2 and 3 <= n <= 5:
         return "stage_cards"
     timeline_matches = _TIMELINE_RE.findall(joined)
-    if len(timeline_matches) >= 2 and len(texts) >= 3:
+    if len(timeline_matches) >= 2 and 3 <= n <= 6:
         return "progress_timeline"
-    if _NUMERIC_RE.search(joined) and len(texts) >= 2:
+    if _NUMERIC_RE.search(joined) and 2 <= n <= 4:
         return "quad_cards"
-    if _COMPARE_RE.search(joined) and len(texts) >= 2:
+    if _COMPARE_RE.search(joined) and 2 <= n <= 4:
         return "two_panel_list"
     return None
 
@@ -477,6 +484,9 @@ def _split_card_text(text: str) -> tuple[str, str]:
     genuinely short line keeps its whole text as a title with no body.
     """
     text = (text or "").strip()
+    if not text:
+        return "", ""
+    text = _SECTION_NUM_RE.sub("", text)
     if not text:
         return "", ""
     m = _CARD_LEAD_RE.match(text)
@@ -502,6 +512,19 @@ def _split_card_text(text: str) -> tuple[str, str]:
 
 
 _TITLE_BLOCK_MAX = 26
+
+
+_SECTION_NUM_RE = re.compile(r"^[（(][一二三四五六七八九十\d]{1,3}[）)]\s*", re.UNICODE)
+_PLACEHOLDER_TITLES = frozenset({"要点", "概述", "内容", "说明", "总结"})
+
+
+def _clean_card_title(title: str) -> str:
+    """Strip section numbering prefixes and placeholder headings."""
+    t = (title or "").strip()
+    t = _SECTION_NUM_RE.sub("", t)
+    if t.lower() in _PLACEHOLDER_TITLES or t in _PLACEHOLDER_TITLES:
+        return ""
+    return t
 
 
 def _looks_like_title(text: str) -> bool:
@@ -579,7 +602,9 @@ def _blocks_to_column_cards(blocks: list, *, page_title: str = "") -> list[dict[
                 cards.append({"title": title[:12], "lines": lines, "grad": True})
             continue
         if grp["title"]:
-            title = grp["title"][:20]
+            title = _clean_card_title(grp["title"][:20])
+            if not title:
+                continue
             if pt and title == pt:
                 continue
             lines = grp["items"] or ([grp["body"]] if grp["body"] else [])
@@ -615,7 +640,9 @@ def _blocks_to_quad_cards(blocks: list, *, page_title: str = "") -> list[dict[st
                               "icon": icons[len(cards) % 4]})
             continue
         if grp["title"]:
-            title = grp["title"][:18]
+            title = _clean_card_title(grp["title"][:18])
+            if not title:
+                continue
             if pt and title == pt:
                 continue
             body = grp["body"] or "\uff1b".join(grp["items"])
@@ -633,13 +660,25 @@ def _blocks_to_quad_cards(blocks: list, *, page_title: str = "") -> list[dict[st
 def _blocks_to_steps(blocks: list) -> list[dict[str, Any]]:
     """Format for progress_timeline: {"date","status","title","desc"}"""
     steps = []
+    _DATE_RE = re.compile(
+        r"\d{1,2}\s*月(?:\s*\d{1,2}\s*[日号])?(?:\s*[·~\-—至]\s*\S{1,8})?"
+        r"|\d{4}\s*年"
+    )
     for block in blocks:
         items = block.items if block.type in ("bullets", "ordered") else [block.text or ""]
         for j, item in enumerate(items):
             parts = item.split("：", 1) if "：" in item else item.split(":", 1)
-            title = parts[0].strip()[:15] if len(parts) > 1 else item[:15]
-            desc = parts[1].strip() if len(parts) > 1 else item
-            steps.append({"date": f"Step {j+1}", "status": "done", "title": title, "desc": desc})
+            if len(parts) > 1:
+                title = parts[0].strip()[:15]
+                desc = parts[1].strip()
+            else:
+                title = item[:15]
+                desc = item
+            date_match = _DATE_RE.search(title)
+            date = date_match.group(0).strip() if date_match else ""
+            if date and title.strip().startswith(date):
+                title = title.strip()[len(date):].strip("·：: —-") or title.strip()
+            steps.append({"date": date, "status": "done", "title": title, "desc": desc})
     return steps
 
 
@@ -817,6 +856,15 @@ def _plan_to_clone_pages(
                 if sub_text == st:
                     sub_text = ""
                 items.append({"title": st, "sub": sub_text})
+            if not items:
+                # No explicit section pages in the storyboard: derive TOC
+                # entries from content page titles so the TOC is never blank.
+                for p in (plan.get("pages") or []):
+                    if p.get("kind") != "content":
+                        continue
+                    ct = _clean_card_title(str(p.get("title") or ""))
+                    if ct and len(items) < 8:
+                        items.append({"title": ct, "sub": ""})
             pages.append({
                 "role": "toc",
                 "title": "目录",

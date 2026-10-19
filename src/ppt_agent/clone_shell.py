@@ -801,6 +801,15 @@ def _empty_ph_shapes(slide):
     return out
 
 
+def _shape_top_in(shape) -> float:
+    """Shape top in inches (0 when the property is missing or zero)."""
+    try:
+        from pptx.util import Emu
+        return Emu(int(shape.top)).inches
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
 def _rank_text_shapes(slide, *, include_empty_ph=False):
     """Return text shapes sorted by descending font size -- the largest is the
     page title, the rest supporting lines. Role-based, no literal matching.
@@ -1071,6 +1080,16 @@ def rebuild_closing(slide, *, prs=None, title_text="", sub_text="",
     meta_text = _strip_md(meta_text)
     ranked = _rank_text_shapes(slide, include_empty_ph=True)
     if not ranked:
+        return False
+    # When all writable shapes sit in the bottom 40% of the slide (typical
+    # photo-cover fallback), the stacked closing text is unreadable. Bail so
+    # the caller draws a clean synthetic closing instead.
+    slide_h = prs.slide_height.inches if prs else 7.5
+    if all(
+        _shape_top_in(sh) > slide_h * 0.6
+        for sh in ranked
+        if hasattr(sh, "top") and sh.top is not None
+    ):
         return False
     from pptx.enum.text import PP_ALIGN as _A
     slots = [x for x in (title_text, sub_text, meta_text) if x]

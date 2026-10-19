@@ -376,15 +376,34 @@ def _render_cover(slide: Any, spec: dict[str, Any], prs: Any) -> list[str]:
 
 
 def _render_closing(slide: Any, spec: dict[str, Any], prs: Any) -> list[str]:
-    from .clone_shell import rebuild_closing
+    from .clone_shell import rebuild_closing, clear_body
 
-    rebuild_closing(
+    ok = rebuild_closing(
         slide,
         prs=prs,
         title_text=str(spec.get("title") or ""),
         sub_text=str(spec.get("sub") or ""),
         meta_text=str(spec.get("meta") or ""),
     )
+    if not ok:
+        # Photo-cover fallback: draw a clean centred closing on white.
+        clear_body(slide)
+        from . import page_kits as K
+        from .page_kits import _round, _tb
+        import pptx.enum.text as _te
+        _round(slide, 0, 0, 13.333, 7.5, fill=K.PS, prst="rect")
+        _tb(slide, 0, 2.4, 13.333, 1.2,
+            str(spec.get("title") or "谢谢"),
+            size=K._fs(48), color=K.PD, bold=True,
+            align=_te.PP_ALIGN.CENTER, anchor=_te.MSO_ANCHOR.MIDDLE)
+        if spec.get("sub"):
+            _tb(slide, 0, 3.8, 13.333, 0.7, spec["sub"],
+                size=K._fs(18), color=K.MUT,
+                align=_te.PP_ALIGN.CENTER)
+        if spec.get("meta"):
+            _tb(slide, 0, 4.7, 13.333, 0.5, spec["meta"],
+                size=K._fs(13), color=K.MUT,
+                align=_te.PP_ALIGN.CENTER)
     return []
 
 
