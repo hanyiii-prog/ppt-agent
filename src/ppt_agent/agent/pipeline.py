@@ -1317,6 +1317,14 @@ def run_pipeline(
     fingerprint = ""
     if design_dna:
         fingerprint = check_template_consistency(design_dna, template_dna or {})
+    if has_template:
+        _emit_progress(
+            progress_callback,
+            "template_analyzed",
+            "模板分析完成",
+            route=route,
+            slide_count=((template_dna or {}).get("presentation") or {}).get("slide_count"),
+        )
 
     document = parse_markdown(markdown, source="pipeline")
     _emit_progress(progress_callback, "source", "已读取源材料")
@@ -1497,6 +1505,13 @@ def run_pipeline(
         plan = build_presentation_plan(analyzed, density=density)
         plan_source = "rules"
     plan["task_spec"] = task_spec
+    _emit_progress(
+        progress_callback,
+        "plan_done",
+        "页面规划完成",
+        page_count=len(plan.get("pages") or []),
+        source=plan_source,
+    )
 
     condensation_report = {
         "original": len(plan.get("pages") or []),
@@ -1523,6 +1538,17 @@ def run_pipeline(
         condensation_report["template_capacity"] = max_total
 
     annotated = annotate_plan(plan, analyzed)
+    _emit_progress(
+        progress_callback,
+        "layout_plan_done",
+        "版式规划完成",
+        page_count=len(annotated.get("pages") or []),
+        route=route,
+        content_pages=sum(
+            1 for page in annotated.get("pages") or []
+            if page.get("kind") == "content"
+        ),
+    )
 
     artifacts: dict[str, Any] = {}
     repair_report: dict[str, Any] = {}
@@ -1641,6 +1667,7 @@ def run_pipeline(
     has_gate_deck = bool(artifacts.get("pptx")) and Path(artifacts["pptx"]).exists()
     if gate_deck and has_gate_deck:
         try:
+            _emit_progress(progress_callback, "gate_start", "开始交付门禁检查")
             _emit_progress(progress_callback, "visual_review_start", "正在做页面视觉审阅")
             gate_report = agent.gate(
                 Path(artifacts["pptx"]),
@@ -1661,6 +1688,13 @@ def run_pipeline(
                 "页面视觉审阅完成",
                 status=visual_review.get("status"),
             )
+            _emit_progress(
+                progress_callback,
+                "gate_done",
+                "交付门禁检查完成",
+                passed=gate_report.get("passed"),
+                mode=gate_report.get("mode"),
+            )
         except Exception as exc:
             gate_report = {"passed": False, "mode": "error", "error": str(exc)}
             visual_review = {
@@ -1668,10 +1702,19 @@ def run_pipeline(
                 "mode": "error",
                 "warning": "交付门禁未能运行，无法完成页面视觉审阅。",
             }
+            _emit_progress(
+                progress_callback,
+                "gate_done",
+                "交付门禁检查失败",
+                passed=False,
+                mode="error",
+            )
     elif not gate_deck:
         visual_review["warning"] = "交付门禁已关闭，未运行模型视觉审阅或确定性检查。"
+        _emit_progress(progress_callback, "gate_done", "交付门禁已关闭", passed=None)
     elif not has_gate_deck:
         visual_review["warning"] = "未生成可供检查的 PPTX，交付门禁和视觉审阅未运行。"
+        _emit_progress(progress_callback, "gate_done", "没有可检查的 PPTX", passed=False)
 
     visual_repair_report: dict[str, Any] = {
         "enabled": False,

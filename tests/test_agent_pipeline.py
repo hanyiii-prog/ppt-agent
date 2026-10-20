@@ -140,7 +140,16 @@ def test_pipeline_emits_user_facing_progress_events(tmp_path: Path) -> None:
 
     stages = [event["stage"] for event in events]
     assert stages[0] == "start"
-    assert {"source", "analyze", "render_start", "render_done"} <= set(stages)
+    assert {
+        "source",
+        "analyze",
+        "plan_done",
+        "layout_plan_done",
+        "render_start",
+        "render_done",
+        "gate_start",
+        "gate_done",
+    } <= set(stages)
     assert "visual_review_start" in stages
     assert "visual_review_done" in stages
     assert stages[-1] == "done"

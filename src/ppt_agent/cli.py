@@ -184,6 +184,14 @@ def _write_json(path: Path, payload: object) -> None:
     write_json_lf(path, payload)
 
 
+def _progress_printer(event: dict) -> None:
+    detail = event.get("detail") or {}
+    extras = " ".join(
+        f"{key}={value}" for key, value in detail.items() if value not in (None, "")
+    )
+    print(f"progress: {event['message']}" + (f" ({extras})" if extras else ""), flush=True)
+
+
 def _agent(host: str | None = None):
     from .adapters import create_adapter
     from .sdk import PptAgent
@@ -470,6 +478,7 @@ def main() -> int:
                 reference_pptx=args.reference,
                 reference_html_path=args.reference_html,
                 reference_pdf_path=args.reference_pdf,
+                progress_callback=_progress_printer,
             )
             if provider_warning:
                 report.setdefault("metadata", {})["provider_warning"] = provider_warning

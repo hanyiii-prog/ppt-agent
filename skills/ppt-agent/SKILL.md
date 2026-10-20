@@ -36,6 +36,15 @@ The production loop is therefore:
 
 This same loop is used both for development/regression testing and for the final user-facing PPT generation. Development tests prove the machinery works; production validation proves the actual requested deck is acceptable.
 
+## Progress reporting
+
+For any multi-minute generation, the host must report progress in the conversation
+while the work is running, not only after the tool returns. When using MCP, pass
+`params._meta.progressToken` with the `tools/call` request and surface every
+`notifications/progress` message to the user. If the host ignores progress
+notifications, use a staged or status-polling orchestration and narrate each
+completed stage explicitly. A final "done" message alone is not sufficient.
+
 ## Reading the gate result
 
 A gate response always states which gates ran. Read `mode` and `degraded` before trusting `passed`:

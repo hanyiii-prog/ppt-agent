@@ -32,6 +32,11 @@ class ToolContext:
     # tools module stays importable without the sampling transport. Tools that
     # want the host model go through llm.select_provider(self.session).
     session: Any = None
+    # Server-owned output each already-bound JSON-RPC notification.
+    notify: Callable[[dict[str, Any]], None] | None = None
+    # Set for one tools/call when the client supplied
+    # params._meta.progressToken. Pipeline events are forwarded through it.
+    progress_callback: Callable[[dict[str, Any]], None] | None = None
 
     def output_path(self, value: str) -> Path:
         """Resolve an output path, refusing to escape the workspace root."""
@@ -603,6 +608,7 @@ def tool_generate(arguments: dict[str, Any], context: ToolContext) -> dict[str, 
             context.input_path(_string(arguments, "reference_pdf"))
             if _optional_string(arguments, "reference_pdf") else None
         ),
+        progress_callback=context.progress_callback,
     )
     if provider_warning:
         result.setdefault("metadata", {})["provider_warning"] = provider_warning

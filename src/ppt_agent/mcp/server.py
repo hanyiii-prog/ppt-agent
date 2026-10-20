@@ -15,6 +15,7 @@ at the ``initialize`` handshake and every consumer degrades -- and discloses
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import queue
 import sys
@@ -56,7 +57,9 @@ INSTRUCTIONS = (
     "removing them. To enable model review of rendered slides, the host must explicitly "
     "declare capabilities.experimental['ppt-agent'].samplingVision=true as well as sampling "
     "support during initialize; absent or false means screenshots are not sent to the model "
-    "and deterministic checks are used with a warning. Direct Responses-compatible "
+    "and deterministic checks are used with a warning. For long-running tools, pass "
+    "params._meta.progressToken and surface every notifications/progress message to the user; "
+    "do not wait until the final tool result to report progress. Direct Responses-compatible "
     "providers can be configured with PPT_AGENT_API_BASE_URL, PPT_AGENT_API_KEY, "
     "PPT_AGENT_MODEL, and optionally PPT_AGENT_VISION_MODEL. A PPTX/HTML/PDF reference "
     "is consumed only through ppt_agent_generate; image-based PDF pages are sent only "
@@ -106,7 +109,36 @@ def handle_message(
         name = params.get("name")
         if not isinstance(name, str) or not name:
             raise JsonRpcError(INVALID_PARAMS, "tools/call requires a tool name")
-        return success(request_id, call_tool(name, params.get("arguments"), context))
+        call_context = context
+        meta = params.get("_meta")
+        progress_token = meta.get("progressToken") if isinstance(meta, dict) else None
+        if progress_token is not None and context.notify is not None:
+            sequence = 0
+
+            def emit_progress(event: dict[str, Any]) -> None:
+                nonlocal sequence
+                sequence += 1
+                detail = event.get("detail") or {}
+                extras = " ".join(
+                    f"{key}={value}"
+                    for key, value in detail.items()
+                    if value not in (None, "")
+                )
+                message = str(event.get("message") or event.get("stage") or "进行中")
+                if extras:
+                    message += f" ({extras})"
+                context.notify({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/progress",
+                    "params": {
+                        "progressToken": progress_token,
+                        "progress": sequence,
+                        "message": message,
+                    },
+                })
+
+            call_context = replace(context, progress_callback=emit_progress)
+        return success(request_id, call_tool(name, params.get("arguments"), call_context))
     if method == "resources/list":
         return success(request_id, {"resources": []})
     if method == "resources/templates/list":
@@ -208,6 +240,7 @@ def serve(
         agent=build_agent(host),
         workspace=Path(workspace or Path.cwd()),
         session=session,
+        notify=lambda payload: _write(output_stream, payload),
     )
     threading.Thread(target=reader, daemon=True).start()
 

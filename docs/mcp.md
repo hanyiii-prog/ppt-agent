@@ -37,10 +37,35 @@ and stable, so it is implemented directly in `ppt_agent/mcp/`.
 | `ping` | Returns `{}` |
 | `tools/list` | Returns all 13 tools with JSON Schema input definitions |
 | `tools/call` | Executes a tool; failures come back as `isError: true` content, not JSON-RPC errors |
+| `notifications/progress` | Emitted during long-running tools when the request supplies `params._meta.progressToken` |
 | `resources/list`, `resources/templates/list`, `prompts/list` | Empty listings (reserved for later use) |
 
 Unknown methods return `-32601`, unknown tool names `-32602`, malformed JSON `-32700`.
 stdout carries protocol traffic only; diagnostics go to stderr.
+
+For long-running generation, include a progress token in the tool call:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "ppt_agent_generate",
+    "_meta": {"progressToken": "ppt-generation-1"},
+    "arguments": {
+      "source": "deck.md",
+      "out_dir": "out"
+    }
+  }
+}
+```
+
+The server emits `notifications/progress` messages with the same token and a
+human-readable `message` for each pipeline stage. The host should surface those
+messages in the conversation as they arrive. If a host ignores progress
+notifications, it must use a staged or status-polling orchestration instead;
+silently waiting for the final response does not satisfy the progress contract.
 
 ## Tools
 
