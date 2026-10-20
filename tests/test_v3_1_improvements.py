@@ -166,6 +166,39 @@ class TestVisualKitSelection:
         assert len(pages[1]["table"]["rows"]) == 2
         assert pages[1]["table"]["rows"][0] == ["Item 11", "P1", "Owner 11"]
 
+    def test_table_title_window_prevents_duplicate_rows_across_pages(self):
+        rows = "".join(f"| {i} | Topic {i} | Owner {i} |\n" for i in range(1, 29))
+        document = parse_markdown(
+            "# Requirements\n\n"
+            "| Page | Topic | Owner |\n| --- | --- | --- |\n" + rows
+        )
+        table = next(block for block in document.blocks if block.type == "table")
+        pages = _plan_to_clone_pages({
+            "pages": [
+                {
+                    "kind": "content",
+                    "title": "Outline：1-14",
+                    "source_blocks": [table.id],
+                    "archetype": {"archetype": "table_page"},
+                },
+                {
+                    "kind": "content",
+                    "title": "Outline：15-28",
+                    "source_blocks": [table.id],
+                    "archetype": {"archetype": "table_page"},
+                },
+            ],
+        }, document)
+
+        assert [page["title"] for page in pages] == [
+            "Outline：1-14（1/2）", "Outline：1-14（2/2）",
+            "Outline：15-28（1/2）", "Outline：15-28（2/2）",
+        ]
+        assert pages[0]["table"]["rows"][0][0] == "1"
+        assert pages[1]["table"]["rows"][-1][0] == "14"
+        assert pages[2]["table"]["rows"][0][0] == "15"
+        assert pages[3]["table"]["rows"][-1][0] == "28"
+
     def test_architecture_semantics_select_layers_without_explicit_kit(self):
         document = parse_markdown(
             "# Platform\n\n## Architecture\n\n"

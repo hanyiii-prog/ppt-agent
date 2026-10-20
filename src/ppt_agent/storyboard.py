@@ -21,6 +21,7 @@ _VISUAL_KITS = frozenset({
     "stage_cards",
     "progress_timeline",
     "stage_timeline",
+    "matrix_table",
     "architecture_layers",
     "four_role_cards",
 })

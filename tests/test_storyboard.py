@@ -96,6 +96,22 @@ def test_storyboard_rejects_unknown_source_block_ids() -> None:
         normalize_storyboard(raw, document)
 
 
+def test_storyboard_accepts_matrix_table_kit() -> None:
+    document = parse_markdown(SAMPLE)
+    source_ids = [block.id for block in document.blocks]
+    raw = {
+        "slides": [{
+            "kind": "content",
+            "title": "Matrix",
+            "source_block_ids": source_ids,
+            "visual_kit": "matrix_table",
+        }],
+    }
+
+    storyboard = normalize_storyboard(raw, document)
+    assert storyboard["slides"][0]["visual_kit"] == "matrix_table"
+
+
 def test_storyboard_rejects_pages_over_user_budget() -> None:
     document = parse_markdown(SAMPLE)
     raw = {
