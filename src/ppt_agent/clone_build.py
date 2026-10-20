@@ -106,7 +106,16 @@ KIT_REQUIRED: dict[str, tuple[str, ...]] = {
 KITS: tuple[str, ...] = tuple(KIT_POSITIONAL)
 
 #: reserved spec keys that are consumed by this module, never forwarded
-_RESERVED = frozenset({"role", "kit", "title", "lead"})
+_RESERVED = frozenset({
+    "role",
+    "kit",
+    "title",
+    "lead",
+    "template_slide",
+    "template_component_id",
+    "template_component_score",
+    "template_component_fallback_reason",
+})
 
 
 def plan_template(template: str | Path) -> dict[str, Any]:
@@ -126,6 +135,27 @@ def plan_template(template: str | Path) -> dict[str, Any]:
 
     dna = extract_deck_dna(template, include_raw_xml=False)
     kinds = dna.get("page_kinds") or {}
+    from .template_components import build_template_component_catalog
+
+    catalog = build_template_component_catalog(template, dna=dna)
+    component_summaries = [
+        {
+            key: component.get(key)
+            for key in (
+                "component_id",
+                "template_slide",
+                "page_kind",
+                "component_kind",
+                "title",
+                "tags",
+                "slot_count",
+                "item_capacity",
+                "text_capacity",
+                "table_count",
+            )
+        }
+        for component in catalog.get("components") or []
+    ]
     return {
         "template": str(template),
         "shells": shells,
@@ -137,6 +167,12 @@ def plan_template(template: str | Path) -> dict[str, Any]:
         },
         "roles": list(ROLES),
         "kits": list(KITS),
+        "component_catalog": {
+            "schema": catalog.get("schema"),
+            "template_hash": catalog.get("template_hash"),
+            "component_count": catalog.get("component_count"),
+            "components": component_summaries,
+        },
     }
 
 
@@ -437,7 +473,23 @@ def _render_section(slide: Any, spec: dict[str, Any], prs: Any) -> list[str]:
 def _render_toc(slide: Any, spec: dict[str, Any], prs: Any) -> list[str]:
     """Render a table-of-contents page: fill the shell's own repeated grid in
     place, and fall back to the synthetic TOC kit only when it has no grid."""
-    from .clone_shell import rebuild_toc, slide_foreground
+    from .clone_shell import clear_body, rebuild_toc, slide_foreground
+
+    # A diagram-heavy content shell can accidentally satisfy a weak TOC
+    # signature. Do not leave its original diagram on the navigation page.
+    if len(slide.shapes) > 12:
+        clear_body(slide)
+        from . import page_kits as K
+
+        K.toc_page(
+            slide,
+            spec.get("items") or [],
+            spec.get("note"),
+            title=str(spec.get("title") or "目录"),
+            title_en=str(spec.get("title_en") or "CONTENTS"),
+            prs=prs,
+        )
+        return ["toc page: diagram-heavy content shell replaced with a clean contents page"]
 
     if rebuild_toc(
         slide,
@@ -500,6 +552,187 @@ def _render_content(slide: Any, spec: dict[str, Any], prs: Any, index: int) -> l
     if ignored:
         warnings.append(
             f"page {index}: kit {kit!r} ignored extra keys: {', '.join(ignored)}"
+        )
+    return warnings
+
+
+def _template_text_replacements(spec: dict[str, Any]) -> list[str]:
+    """Flatten a page spec into ordered text slots for a template page."""
+    values: list[str] = []
+    lead = str(spec.get("lead") or "").strip()
+    if lead:
+        values.append(lead)
+    for card in spec.get("cards") or []:
+        title = str(card.get("title") or "").strip()
+        body = card.get("body")
+        if body:
+            values.append(f"{title}\n{body}" if title else str(body))
+            continue
+        lines = [str(line).strip() for line in card.get("lines") or [] if str(line).strip()]
+        values.append(f"{title}\n" + "\n".join(lines) if title else "\n".join(lines))
+    for step in spec.get("steps") or []:
+        values.append(
+            " · ".join(
+                str(step.get(key) or "").strip()
+                for key in ("date", "title", "desc")
+                if str(step.get(key) or "").strip()
+            )
+        )
+    for stage in spec.get("stages") or []:
+        values.append(
+            " · ".join(
+                str(stage.get(key) or "").strip()
+                for key in ("head", "desc", "tasks")
+                if str(stage.get(key) or "").strip()
+            )
+        )
+    for layer in spec.get("layers") or []:
+        values.append(
+            " · ".join(
+                str(layer.get(key) or "").strip()
+                for key in ("head", "desc")
+                if str(layer.get(key) or "").strip()
+            )
+        )
+    return [value for value in values if value]
+
+
+def _dedupe_body_text(slide: Any) -> None:
+    """Remove duplicated long labels left by a reused template or kit."""
+    from pptx.util import Emu
+    from .clone_shell import _blank_box, _rank_text_shapes
+
+    seen: set[str] = set()
+    for shape in _rank_text_shapes(slide):
+        text = shape.text_frame.text.strip()
+        top = float(Emu(shape.top).inches) if shape.top is not None else 0.0
+        if len(text) < 8:
+            continue
+        duplicate = any(
+            text == existing
+            or (
+                len(text) >= 12
+                and len(existing) >= 12
+                and (text.startswith(existing) or existing.startswith(text))
+            )
+            for existing in seen
+        )
+        if duplicate and top >= 0.8:
+            _blank_box(shape)
+        else:
+            seen.add(text)
+
+
+def _render_template_content(
+    slide: Any,
+    spec: dict[str, Any],
+    prs: Any,
+    index: int,
+) -> list[str]:
+    """Reuse a template content slide while replacing its writable text slots."""
+    from pptx.util import Emu
+    from .clone_shell import (
+        _blank_box,
+        _font_size_pt,
+        _rank_text_shapes,
+        _write_box,
+        clear_body,
+    )
+    from .template_components import _text_capacity
+
+    warnings: list[str] = []
+    title = str(spec.get("title") or "").strip()
+    shapes = [
+        shape for shape in _rank_text_shapes(slide)
+        if shape.top is not None
+        and 0.15 <= float(Emu(shape.top).inches) <= 7.0
+        and shape.width is not None
+        and float(Emu(shape.width).inches) >= 0.5
+    ]
+    if not shapes:
+        return [f"page {index}: template component has no writable text slots"]
+
+    def fit_text(text: str, shape: Any) -> str:
+        capacity = max(8, int(_text_capacity(shape, _font_size_pt(shape)) * 0.8))
+        height = float(Emu(shape.height).inches) if shape.height is not None else 99.0
+        if height < 0.5:
+            capacity = min(capacity, 16)
+        elif height < 0.8:
+            capacity = min(capacity, 30)
+        if len(text) <= capacity:
+            return text
+        cut = text[:max(1, capacity - 1)]
+        boundary = max(cut.rfind("。"), cut.rfind("；"), cut.rfind("，"), cut.rfind("\n"))
+        if boundary >= max(4, capacity // 3):
+            cut = cut[:boundary + 1]
+        return cut.rstrip() + "…"
+
+    body_shapes = shapes[1:]
+    replacements = _template_text_replacements(spec)
+    capacities = [
+        max(8, int(_text_capacity(shape, _font_size_pt(shape)) * 0.8))
+        for shape in body_shapes
+    ]
+    title_capacity = _text_capacity(shapes[0], _font_size_pt(shapes[0]))
+    total_capacity = sum(capacities[:len(replacements)])
+    too_tight = (
+        len(replacements) > len(body_shapes)
+        or len(title) > max(8, title_capacity) * 1.2
+        or (
+            len(replacements) >= 6
+            and any(capacity < 25 for capacity in capacities[:len(replacements)])
+        )
+        or (
+            replacements
+            and sum(len(value) for value in replacements) > total_capacity * 1.1
+        )
+        or any(
+            len(value) > max(8, capacity)
+            for value, capacity in zip(replacements, capacities)
+        )
+    )
+    if too_tight:
+        clear_body(slide)
+        warnings = _render_content(slide, spec, prs, index)
+        _dedupe_body_text(slide)
+        warnings.append(
+            f"page {index}: template component text capacity was too tight; "
+            "rebuilt with its code-kit fallback"
+        )
+        return warnings
+
+    _write_box(shapes[0], fit_text(title, shapes[0]))
+    for slot, value in zip(body_shapes, replacements):
+        _write_box(slot, fit_text(value, slot), multi=True)
+    for slot in body_shapes[len(replacements):]:
+        _blank_box(slot)
+
+    _dedupe_body_text(slide)
+
+    table_spec = spec.get("table")
+    template_table = next(
+        (shape for shape in slide.shapes if getattr(shape, "has_table", False)),
+        None,
+    )
+    if table_spec and template_table is not None:
+        rows = table_spec.get("rows") or []
+        headers = table_spec.get("headers") or []
+        table = template_table.table
+        for row_index, row in enumerate([headers, *rows]):
+            if row_index >= len(table.rows):
+                break
+            for col_index, value in enumerate(row):
+                if col_index < len(table.columns):
+                    table.cell(row_index, col_index).text = str(value)
+    elif table_spec and template_table is None:
+        warnings.append(
+            f"page {index}: selected template component has no table; "
+            "table content was not rendered"
+        )
+    if spec.get("template_component_id"):
+        warnings.append(
+            f"page {index}: used template component "
+            f"{spec['template_component_id']!r}"
         )
     return warnings
 
@@ -609,6 +842,22 @@ def render_clone_deck(
         _check_capacity(deck, pages)
         for index, spec in enumerate(pages, 1):
             role = _role_of(spec)
+            template_slide = spec.get("template_slide")
+            if role == "content" and template_slide:
+                source_index = int(template_slide) - 1
+                try:
+                    slide = deck.assign(source_index, role="content", cleared=False)
+                    shell_index = source_index
+                    served_bucket = "content"
+                    warnings.extend(
+                        _render_template_content(slide, spec, deck.prs, index)
+                    )
+                    continue
+                except ValueError as exc:
+                    warnings.append(
+                        f"page {index}: template component unavailable ({exc}); "
+                        "falling back to kit fallback"
+                    )
             cleared = role not in ("cover", "closing", "section", "toc")
             shell_index, slide, served_bucket = _take(deck, role, cleared=cleared)
             # the clone route keeps the TEMPLATE's page order: the shell that
@@ -629,6 +878,7 @@ def render_clone_deck(
                 warnings.extend(_render_toc(slide, spec, deck.prs))
             else:
                 warnings.extend(_render_content(slide, spec, deck.prs, index))
+                _dedupe_body_text(slide)
         deck.finish(str(output))
     finally:
         deck.close()

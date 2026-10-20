@@ -325,7 +325,7 @@ class TestKitDiversity:
 
 
 class TestSparsePageGuards:
-    def test_title_only_sections_are_not_rendered_as_sparse_dividers(self):
+    def test_title_only_sections_derive_summary_instead_of_being_dropped(self):
         document = parse_markdown(
             "# Report\n\n## Results\n\n- Revenue reached 91%\n"
         )
@@ -338,7 +338,8 @@ class TestSparsePageGuards:
             ],
         }, document)
 
-        assert [page["role"] for page in pages] == ["content"]
+        assert [page["role"] for page in pages] == ["section", "content"]
+        assert pages[0]["lines"] == ["Revenue reached 91%"]
 
     def test_one_sided_two_panel_falls_back_to_cards(self):
         document = parse_markdown(

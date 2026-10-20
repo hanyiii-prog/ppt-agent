@@ -164,11 +164,33 @@ def validate_deck_structure(pptx: Path) -> list[tuple[int, int, int, list[str]]]
         for shape in slide.shapes:
             if _is_zero_size(shape):
                 zero += 1
-            if shape.left < 0 or shape.top < 0 or shape.left + shape.width > sw or shape.top + shape.height > sh:
+            out_of_bounds = (
+                shape.left < 0
+                or shape.top < 0
+                or shape.left + shape.width > sw
+                or shape.top + shape.height > sh
+            )
+            if out_of_bounds and not _is_decorative_bleed(shape):
                 oob += 1
                 issues.append(f"shape {shape.shape_id} outside slide bounds")
         result.append((len(slide.shapes), oob, zero, issues))
     return result
+
+
+def _is_decorative_bleed(shape) -> bool:
+    """Inherited photos, lines and freeforms may intentionally bleed off-slide."""
+    try:
+        if getattr(shape, "has_text_frame", False) and (shape.text or "").strip():
+            return False
+    except Exception:
+        pass
+    decorative_types = {
+        MSO_SHAPE_TYPE.AUTO_SHAPE,
+        MSO_SHAPE_TYPE.PICTURE,
+        MSO_SHAPE_TYPE.FREEFORM,
+        getattr(MSO_SHAPE_TYPE, "LINE", None),
+    }
+    return shape.shape_type in decorative_types
 
 
 def validate_structural_pages(pptx: Path) -> DeckGateReport:

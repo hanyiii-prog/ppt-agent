@@ -245,6 +245,9 @@ def test_generate_falls_back_to_direct_provider_when_no_sampling(
     monkeypatch,
 ) -> None:
     captured: dict = {}
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_API_BASE_URL", raising=False)
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_API_KEY", raising=False)
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_MODELS", raising=False)
 
     def fake_pipeline(markdown: str, **kwargs):
         captured.update(kwargs)

@@ -8,6 +8,7 @@ import pytest
 pytest.importorskip("pptx")
 
 from pptx import Presentation  # noqa: E402
+from pptx.enum.shapes import MSO_SHAPE  # noqa: E402
 from pptx.util import Inches  # noqa: E402
 
 from ppt_agent.clone_build import (  # noqa: E402
@@ -221,6 +222,62 @@ def test_clone_tools_round_trip(tmp_path):
                         {"pptx": str(tmp_path / "decks" / "out.pptx")}, context)
     payload = json.loads(audited["content"][0]["text"])
     assert payload["count"] == 0
+
+
+def test_template_component_reuses_shapes_and_replaces_text(tmp_path):
+    prs = Presentation()
+    layout = prs.slide_layouts[5]
+    layout.name = "内容页 - 有标题"
+    slide = prs.slides.add_slide(layout)
+    slide.shapes.title.text = "旧标题"
+    decoration = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE,
+        Inches(0.6),
+        Inches(1.4),
+        Inches(4.0),
+        Inches(1.2),
+    )
+    decoration.name = "keep-decoration"
+    body = slide.shapes.add_textbox(
+        Inches(0.8),
+        Inches(1.7),
+        Inches(3.4),
+        Inches(0.6),
+    )
+    body.text_frame.text = "旧正文"
+    body2 = slide.shapes.add_textbox(
+        Inches(0.8),
+        Inches(2.5),
+        Inches(3.4),
+        Inches(0.6),
+    )
+    body2.text_frame.text = "旧补充"
+    template = tmp_path / "component-template.pptx"
+    prs.save(template)
+
+    output = tmp_path / "component-output.pptx"
+    render_clone_deck(
+        template,
+        [{
+            "role": "content",
+            "template_slide": 1,
+            "title": "新标题",
+            "lead": "新摘要",
+            "kit": "column_cards",
+            "cards": [{"title": "新卡片", "lines": ["新正文"]}],
+        }],
+        output,
+    )
+
+    built = Presentation(output)
+    texts = [
+        shape.text_frame.text
+        for shape in built.slides[0].shapes
+        if shape.has_text_frame
+    ]
+    assert "新标题" in texts
+    assert any("新摘要" in text or "新正文" in text for text in texts)
+    assert any(shape.name == "keep-decoration" for shape in built.slides[0].shapes)
 
 
 def _write_template(path):

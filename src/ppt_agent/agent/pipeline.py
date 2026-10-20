@@ -95,6 +95,28 @@ def _component_matches_for_report(document) -> dict:
         return {"schema": "component-match/v1", "components": [], "matches": [], "unmatched": []}
 
 
+def _template_catalog_summary(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not catalog:
+        return []
+    return [
+        {
+            key: component.get(key)
+            for key in (
+                "component_id",
+                "template_slide",
+                "component_kind",
+                "title",
+                "tags",
+                "slot_count",
+                "item_capacity",
+                "text_capacity",
+                "table_count",
+            )
+        }
+        for component in catalog.get("components") or []
+    ]
+
+
 WARNING_FIX_RULES = frozenset({
     "crowded", "text_too_small", "overlap", "hierarchy", "image_text_mismatch",
 })
@@ -276,6 +298,7 @@ def condense_plan(
     document: Any,
     *,
     max_total: int = MAX_TOTAL_PAGES,
+    drop_instead_of_merge: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Limit the plan to <= ``max_total`` pages WITHOUT losing the narrative.
 
@@ -334,6 +357,39 @@ def condense_plan(
         take = min(share, len(pool), remaining)
         quota[title] = take
         remaining -= take
+
+    if drop_instead_of_merge:
+        selected: list[dict[str, Any]] = []
+        for title, pool in by_section.items():
+            allowance = max(1, min(quota.get(title, 0), len(pool)))
+            ordered_pool = sorted(pool, key=lambda page: page.get("page_no") or 0)
+            chosen = sorted(
+                sorted(ordered_pool, key=content_value, reverse=True)[:allowance],
+                key=lambda page: page.get("page_no") or 0,
+            )
+            selected.extend(_copy.deepcopy(page) for page in chosen)
+        new_pages = [
+            _copy.deepcopy(page)
+            for page in pages
+            if page.get("kind") != "content"
+        ]
+        new_pages.extend(selected)
+        new_pages.sort(key=lambda page: page.get("page_no") or 0)
+        for index, page in enumerate(new_pages, start=1):
+            page["page_no"] = index
+        condensed["pages"] = new_pages
+        condensed["page_total"] = len(new_pages)
+        return condensed, {
+            "original": original_total,
+            "final": len(new_pages),
+            "max_total": max_total,
+            "sections_merged": len(by_section),
+            "pages_dropped": max(0, len(contents) - len(selected)),
+            "pages_merged": 0,
+            "source_blocks_merged": 0,
+            "spine_sections": len(sections),
+            "strategy": "kept the section spine and dropped low-value content pages",
+        }
 
     dropped_pages = 0
     merged_pages = 0
@@ -533,6 +589,17 @@ def _split_card_text(text: str) -> tuple[str, str]:
     return text[:12], text[12:].strip()
 
 
+def _clip_text(text: str, limit: int = 72) -> str:
+    value = str(text or "").strip().replace("\n", " ")
+    if len(value) <= limit:
+        return value
+    cut = value[: int(limit * 0.8)]
+    boundary = max(cut.rfind("。"), cut.rfind("；"), cut.rfind("，"), cut.rfind(";"))
+    if boundary >= max(8, limit // 3):
+        cut = cut[:boundary + 1]
+    return cut.rstrip() + "…"
+
+
 _TITLE_BLOCK_MAX = 26
 
 
@@ -620,16 +687,19 @@ def _blocks_to_column_cards(blocks: list, *, page_title: str = "") -> list[dict[
         if grp.get("table") is not None:
             for row in grp["table"].rows:
                 title = row[0] if row else ""
-                lines = [c for c in row[1:] if c]
+                lines = [_clip_text(c, 72) for c in row[1:] if c]
                 cards.append({"title": title[:12], "lines": lines, "grad": True})
             continue
         if grp["title"]:
-            title = _clean_card_title(grp["title"][:20])
+            title = _clean_card_title(grp["title"][:14])
             if not title:
                 continue
             if pt and title == pt:
                 continue
-            lines = grp["items"] or ([grp["body"]] if grp["body"] else [])
+            lines = [
+                _clip_text(line, 72)
+                for line in (grp["items"] or ([grp["body"]] if grp["body"] else []))
+            ]
             cards.append({"title": title, "lines": list(lines), "grad": True})
             continue
         texts = grp["items"] or ([grp["body"]] if grp["body"] else [])
@@ -639,12 +709,16 @@ def _blocks_to_column_cards(blocks: list, *, page_title: str = "") -> list[dict[
             if grp["body"] and not grp["title"]:
                 cards.append({
                     "title": "要点",
-                    "lines": [grp["body"]],
+                    "lines": [_clip_text(grp["body"], 72)],
                     "grad": True,
                 })
                 break
             title, body = _split_card_text(item)
-            cards.append({"title": title, "lines": [body] if body else [], "grad": True})
+            cards.append({
+                "title": title,
+                "lines": [_clip_text(body, 72)] if body else [],
+                "grad": True,
+            })
     return cards
 
 
@@ -657,17 +731,17 @@ def _blocks_to_quad_cards(blocks: list, *, page_title: str = "") -> list[dict[st
         if grp.get("table") is not None:
             for row in grp["table"].rows:
                 title = row[0] if row else ""
-                body = "\uff1b".join(c for c in row[1:] if c)
+                body = _clip_text("\uff1b".join(c for c in row[1:] if c), 80)
                 cards.append({"title": title[:14], "body": body,
                               "icon": icons[len(cards) % 4]})
             continue
         if grp["title"]:
-            title = _clean_card_title(grp["title"][:18])
+            title = _clean_card_title(grp["title"][:14])
             if not title:
                 continue
             if pt and title == pt:
                 continue
-            body = grp["body"] or "\uff1b".join(grp["items"])
+            body = _clip_text(grp["body"] or "\uff1b".join(grp["items"]), 80)
             cards.append({"title": title, "body": body, "icon": icons[len(cards) % 4]})
             continue
         texts = grp["items"] or ([grp["body"]] if grp["body"] else [])
@@ -675,6 +749,7 @@ def _blocks_to_quad_cards(blocks: list, *, page_title: str = "") -> list[dict[st
             if pt and item.strip() == pt:
                 continue
             title, body = _split_card_text(item)
+            body = _clip_text(body, 80)
             cards.append({"title": title, "body": body, "icon": icons[len(cards) % 4]})
     return cards[:4]
 
@@ -686,7 +761,63 @@ def _blocks_to_steps(blocks: list) -> list[dict[str, Any]]:
         r"\d{1,2}\s*月(?:\s*\d{1,2}\s*[日号])?(?:\s*[·~\-—至]\s*\S{1,8})?"
         r"|\d{4}\s*年"
     )
+    def status_for(text: str) -> str:
+        lowered = text.strip().lower()
+        if any(token in lowered for token in ("已完成", "已交付", "已上线", "完成", "done")):
+            return "done"
+        if any(token in lowered for token in ("进行中", "当前", "推进中", "开发中", "doing")):
+            return "doing"
+        if any(token in lowered for token in ("计划", "待启动", "预计", "未开始", "plan")):
+            return "plan"
+        return "doing"
+
     for block in blocks:
+        if block.type == "table":
+            headers = [str(cell or "").strip() for cell in (block.headers or [])]
+            date_index = next(
+                (i for i, header in enumerate(headers) if "时间" in header or "日期" in header),
+                0,
+            )
+            status_index = next(
+                (i for i, header in enumerate(headers) if "状态" in header or "进度" in header),
+                None,
+            )
+            content_index = next(
+                (
+                    i for i, header in enumerate(headers)
+                    if any(token in header for token in ("工作内容", "任务", "内容", "事项", "工作"))
+                ),
+                None,
+            )
+            for row in block.rows:
+                values = [str(cell or "").strip() for cell in row]
+                if not any(values):
+                    continue
+                date = values[date_index] if date_index < len(values) else ""
+                status_text = (
+                    values[status_index]
+                    if status_index is not None and status_index < len(values)
+                    else ""
+                )
+                if content_index is not None and content_index < len(values):
+                    content = values[content_index]
+                else:
+                    content = "；".join(
+                        value for index, value in enumerate(values)
+                        if index not in {date_index, status_index} and value
+                    )
+                title, _, desc = content.partition("：")
+                if not desc:
+                    title, _, desc = content.partition(":")
+                if not desc:
+                    title, desc = content[:18], content
+                steps.append({
+                    "date": date,
+                    "status": status_for(status_text or content),
+                    "title": title.strip()[:18] or content[:18],
+                    "desc": desc.strip() or content,
+                })
+            continue
         items = block.items if block.type in ("bullets", "ordered") else [block.text or ""]
         for j, item in enumerate(items):
             parts = item.split("：", 1) if "：" in item else item.split(":", 1)
@@ -700,7 +831,12 @@ def _blocks_to_steps(blocks: list) -> list[dict[str, Any]]:
             date = date_match.group(0).strip() if date_match else ""
             if date and title.strip().startswith(date):
                 title = title.strip()[len(date):].strip("·：: —-") or title.strip()
-            steps.append({"date": date, "status": "done", "title": title, "desc": desc})
+            steps.append({
+                "date": date,
+                "status": status_for(item),
+                "title": title,
+                "desc": desc,
+            })
     return steps
 
 
@@ -758,8 +894,8 @@ def _blocks_to_stages(blocks: list, *, page_title: str = "") -> list[dict[str, s
                 if not values:
                     continue
                 stages.append({
-                    "head": values[0][:18],
-                    "desc": "；".join(values[1:])[:180],
+                    "head": values[0][:14],
+                    "desc": _clip_text("；".join(values[1:]), 90),
                 })
             continue
         if block.type in ("bullets", "ordered") and block.items:
@@ -768,12 +904,12 @@ def _blocks_to_stages(blocks: list, *, page_title: str = "") -> list[dict[str, s
                     continue
                 parts = item.split("：", 1) if "：" in item else item.split(":", 1)
                 head = parts[0].strip()[:10] if len(parts) > 1 else item[:10]
-                desc = parts[1].strip() if len(parts) > 1 else item
+                desc = _clip_text(parts[1].strip() if len(parts) > 1 else item, 90)
                 stages.append({"head": head, "desc": desc})
         elif block.text:
             if pt and block.text.strip() == pt:
                 continue
-            stages.append({"head": block.text[:10], "desc": block.text})
+            stages.append({"head": block.text[:10], "desc": _clip_text(block.text, 90)})
     return stages
 
 
@@ -787,8 +923,8 @@ def _blocks_to_architecture_layers(blocks: list) -> list[dict[str, str]]:
                 if not values:
                     continue
                 layers.append({
-                    "head": values[0][:18],
-                    "desc": "；".join(values[1:])[:180],
+                    "head": values[0][:16],
+                    "desc": _clip_text("；".join(values[1:]), 90),
                     "level": len(layers) + 1,
                 })
     return layers
@@ -964,6 +1100,8 @@ def _visual_kit_fits(kit: str, blocks: list[Any]) -> bool:
         return any(block.type == "table" for block in blocks) and 3 <= count <= 8
     if kit == "four_role_cards":
         return any(block.type == "table" for block in blocks) and 3 <= count <= 5
+    if kit == "org_chart":
+        return any(block.type == "table" for block in blocks) and 3 <= count <= 12
     if kit == "matrix_table":
         table = next((block for block in blocks if block.type == "table"), None)
         return (
@@ -1010,6 +1148,44 @@ def _semantic_visual_kit(archetype: str, blocks: list[Any]) -> str | None:
     return None
 
 
+def _template_component_kind_for_kit(kit: str) -> str:
+    """Map a code-kit choice to a catalog component intent."""
+    if kit in {"org_chart", "four_role_cards"}:
+        return "org_chart"
+    if kit in {"stage_cards", "stage_timeline", "progress_timeline"}:
+        return "timeline"
+    if kit == "architecture_layers":
+        return "architecture"
+    if kit == "matrix_table":
+        return "table"
+    return "cards"
+
+
+def _template_component_kind_for_page(
+    kit: str,
+    title: str,
+    key_message: str,
+) -> str:
+    if kit == "matrix_table":
+        return "table"
+    if kit == "architecture_layers":
+        return "architecture"
+    if kit in {"org_chart", "four_role_cards"}:
+        return "org_chart"
+    if kit in {"stage_cards", "stage_timeline", "progress_timeline"}:
+        return "timeline"
+    text = f"{title}\n{key_message}"
+    if any(token in text for token in ("组织", "职责", "分工", "保障", "团队", "人员")):
+        return "org_chart"
+    if any(token in text for token in ("时间", "节点", "阶段", "推进", "计划", "旬")):
+        return "timeline"
+    if any(token in text for token in ("架构", "平台", "系统", "集成", "底座")):
+        return "architecture"
+    if any(token in text for token in ("进度", "指标", "完成", "成效", "比例")):
+        return "kpi"
+    return _template_component_kind_for_kit(kit)
+
+
 def _coerce_design_plan(plan):
     """Accept either a raw page list or a ``{deck, meta, pages}`` envelope."""
     if isinstance(plan, list):
@@ -1047,15 +1223,101 @@ def _diversify_kits(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return pages
 
 
+def _ensure_story_spine(
+    plan: dict[str, Any],
+    document: Any,
+) -> dict[str, Any]:
+    """Add a TOC and chapter dividers when the planner omitted them."""
+    pages = [dict(page) for page in (plan.get("pages") or [])]
+    if not pages:
+        return plan
+    if not any(page.get("kind") == "toc" for page in pages):
+        insert_at = 1 if pages[0].get("kind") == "cover" else 0
+        pages.insert(insert_at, {
+            "kind": "toc",
+            "title": "目录",
+            "source_blocks": [],
+        })
+    if any(page.get("kind") == "section" for page in pages):
+        for index, page in enumerate(pages, start=1):
+            page["page_no"] = index
+        return {**plan, "pages": pages, "page_total": len(pages)}
+
+    block_pos = {block.id: index for index, block in enumerate(document.blocks)}
+    section_heads = [
+        (index, block)
+        for index, block in enumerate(document.blocks)
+        if block.type == "heading" and (block.level or 1) == 2
+    ]
+    if not section_heads:
+        for index, page in enumerate(pages, start=1):
+            page["page_no"] = index
+        return {**plan, "pages": pages, "page_total": len(pages)}
+
+    page_section: dict[int, int] = {}
+    for page_index, page in enumerate(pages):
+        if page.get("kind") != "content":
+            continue
+        positions = [
+            block_pos[block_id]
+            for block_id in page.get("source_blocks") or []
+            if block_id in block_pos
+        ]
+        if not positions:
+            continue
+        first = min(positions)
+        owner = None
+        for section_index, (head_pos, _heading) in enumerate(section_heads):
+            if head_pos <= first:
+                owner = section_index
+            else:
+                break
+        if owner is not None:
+            page_section[page_index] = owner
+
+    by_section: dict[int, list[dict[str, Any]]] = {}
+    for page_index, section_index in page_section.items():
+        by_section.setdefault(section_index, []).append(pages[page_index])
+
+    rebuilt: list[dict[str, Any]] = []
+    emitted: set[int] = set()
+    for page_index, page in enumerate(pages):
+        section_index = page_section.get(page_index)
+        if section_index is not None and section_index not in emitted:
+            heading = section_heads[section_index][1]
+            children = by_section.get(section_index, [])
+            lines = [
+                str(child.get("key_message") or child.get("title") or "").strip()
+                for child in children
+            ]
+            lines = [line for line in dict.fromkeys(lines) if line][:3]
+            if lines:
+                rebuilt.append({
+                    "kind": "section",
+                    "title": heading.text or f"章节 {section_index + 1}",
+                    "lines": lines,
+                    "source_blocks": [],
+                })
+                emitted.add(section_index)
+        rebuilt.append(page)
+
+    for index, page in enumerate(rebuilt, start=1):
+        page["page_no"] = index
+    return {**plan, "pages": rebuilt, "page_total": len(rebuilt)}
+
+
 def _plan_to_clone_pages(
     plan: dict[str, Any],
     document: Any,
+    *,
+    template_catalog: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Convert a presentation plan into clone-route page specs (correct formats)."""
     lookup = {block.id: block for block in document.blocks}
+    plan_pages = plan.get("pages") or []
     section_titles = [
         str(page.get("title") or "")
-        for page in plan.get("pages") or []
+        for page in plan_pages
         if page.get("kind") == "section"
     ]
 
@@ -1063,8 +1325,9 @@ def _plan_to_clone_pages(
     pages: list[dict[str, Any]] = []
     _content_rotation = 0
     _section_count = 1
+    used_template_slides: set[int] = set()
 
-    for page in plan.get("pages") or []:
+    for page_index, page in enumerate(plan_pages):
         kind = str(page.get("kind") or "content")
         archetype = (page.get("archetype") or {}).get("archetype") or "title_bullets"
         blocks = [lookup[bid] for bid in page.get("source_blocks") or [] if bid in lookup]
@@ -1096,7 +1359,7 @@ def _plan_to_clone_pages(
             if not items:
                 # No explicit section pages in the storyboard: derive TOC
                 # entries from content page titles so the TOC is never blank.
-                for p in (plan.get("pages") or []):
+                for p in plan_pages:
                     if p.get("kind") != "content":
                         continue
                     ct = _clean_card_title(str(p.get("title") or ""))
@@ -1112,17 +1375,60 @@ def _plan_to_clone_pages(
             section_children = [
                 lookup[bid] for bid in page.get("source_blocks") or [] if bid in lookup
             ]
-            lines = []
+            lines = [
+                str(line).strip()
+                for line in (page.get("lines") or [])
+                if str(line).strip()
+            ]
             for b in section_children:
                 if b.type in ("bullets", "ordered"):
-                    lines.extend(b.items[:3])
+                    lines.extend(item for item in b.items[:3] if item not in lines)
                 elif b.text:
-                    lines.append(b.text)
+                    if b.text not in lines:
+                        lines.append(b.text)
+            lines = lines[:3]
             section_title = str(page.get("title") or "")
             lines = [line for line in lines if line and line != section_title]
             if not lines:
-                # A divider with only its own title is a sparse page, not a
-                # narrative step. Skip it and let content pages carry the flow.
+                # The divider often owns no source blocks of its own. Derive
+                # its takeaway lines from the content pages it introduces
+                # instead of deleting the chapter spine.
+                for child in plan_pages[page_index + 1:]:
+                    child_kind = str(child.get("kind") or "content")
+                    if child_kind in ("section", "cover", "toc", "closing"):
+                        break
+                    if child_kind != "content":
+                        continue
+                    summary = str(
+                        child.get("key_message")
+                        or child.get("title")
+                        or ""
+                    ).strip()
+                    summary_added = bool(
+                        summary and summary != section_title and summary not in lines
+                    )
+                    if summary_added:
+                        lines.append(summary)
+                    if not summary_added and len(lines) < 3:
+                        child_blocks = [
+                            lookup[bid]
+                            for bid in child.get("source_blocks") or []
+                            if bid in lookup
+                        ]
+                        for child_block in child_blocks:
+                            if child_block.type in ("heading", "paragraph") and child_block.text:
+                                candidate = _clip_text(child_block.text, 48)
+                            elif child_block.type in ("bullets", "ordered") and child_block.items:
+                                candidate = _clip_text(child_block.items[0], 48)
+                            else:
+                                continue
+                            if candidate and candidate != section_title and candidate not in lines:
+                                lines.append(candidate)
+                            if len(lines) >= 3:
+                                break
+                    if len(lines) >= 3:
+                        break
+            if not lines:
                 continue
             pages.append({
                 "role": "section",
@@ -1201,6 +1507,63 @@ def _plan_to_clone_pages(
                 "title": page_title,
                 "lead": lead_text or None,
             }
+            if template_catalog:
+                from ..template_components import rank_template_components
+
+                requested_component = str(
+                    page.get("template_component_id") or ""
+                ).strip()
+                template_match = None
+                if requested_component:
+                    template_match = next(
+                        (
+                            {
+                                "component_id": item.get("component_id"),
+                                "template_slide": item.get("template_slide"),
+                                "component_kind": item.get("component_kind"),
+                                "score": 1.0,
+                            }
+                            for item in template_catalog.get("components") or []
+                            if item.get("component_id") == requested_component
+                            and int(item.get("template_slide") or 0)
+                            not in used_template_slides
+                        ),
+                        None,
+                    )
+                if template_match is None:
+                    component_kind = _template_component_kind_for_page(
+                        kit,
+                        page_title,
+                        str(page.get("key_message") or ""),
+                    )
+                    candidates = rank_template_components(
+                        template_catalog,
+                        component_kind=component_kind,
+                        tags=(page_title, page.get("key_message") or "", *block_texts),
+                        item_count=_page_item_count(blocks),
+                        text_chars=sum(
+                            len(block.text or "")
+                            + sum(len(item) for item in (block.items or []))
+                            for block in blocks
+                        ),
+                        exclude_slides=used_template_slides,
+                        limit=1,
+                    )
+                    template_match = candidates[0] if candidates else None
+                    if requested_component and template_match is not None:
+                        spec["template_component_fallback_reason"] = (
+                            f"requested component {requested_component!r} was unavailable; "
+                            f"selected {template_match.get('component_id')!r}"
+                        )
+                if template_match is not None:
+                    template_slide = int(template_match.get("template_slide") or 0)
+                    used_template_slides.add(template_slide)
+                    spec["template_slide"] = template_slide
+                    spec["template_component_id"] = template_match.get("component_id")
+                    spec["template_component_score"] = template_match.get("score")
+                elif kit == "org_chart":
+                    kit = "four_role_cards"
+                    spec["kit"] = kit
             if kit == "quad_cards":
                 spec["cards"] = _blocks_to_quad_cards(blocks, page_title=page_title)
             elif kit == "progress_timeline":
@@ -1230,6 +1593,8 @@ def _plan_to_clone_pages(
             elif kit == "architecture_layers":
                 spec["layers"] = _blocks_to_architecture_layers(blocks)
             elif kit == "four_role_cards":
+                spec["cards"] = _blocks_to_role_cards(blocks)
+            elif kit == "org_chart":
                 spec["cards"] = _blocks_to_role_cards(blocks)
             elif kit == "matrix_table":
                 table_contract = _blocks_to_matrix_table(blocks)
@@ -1317,6 +1682,14 @@ def run_pipeline(
     fingerprint = ""
     if design_dna:
         fingerprint = check_template_consistency(design_dna, template_dna or {})
+    template_catalog: dict[str, Any] | None = None
+    if has_template:
+        from ..template_components import build_template_component_catalog
+
+        template_catalog = build_template_component_catalog(
+            template_path,
+            dna=template_dna,
+        )
     if has_template:
         _emit_progress(
             progress_callback,
@@ -1324,6 +1697,7 @@ def run_pipeline(
             "模板分析完成",
             route=route,
             slide_count=((template_dna or {}).get("presentation") or {}).get("slide_count"),
+            component_count=(template_catalog or {}).get("component_count"),
         )
 
     document = parse_markdown(markdown, source="pipeline")
@@ -1471,7 +1845,10 @@ def run_pipeline(
     storyboard_result = build_storyboard(
         analyzed,
         llm_fn=llm_fn,
-        constraints=task_spec,
+        constraints={
+            **task_spec,
+            "template_components": _template_catalog_summary(template_catalog),
+        },
         reference_images=pdf_reference_images,
     )
     storyboard = storyboard_result["storyboard"]
@@ -1504,6 +1881,8 @@ def run_pipeline(
         narrative = build_narrative(analyzed)
         plan = build_presentation_plan(analyzed, density=density)
         plan_source = "rules"
+    if plan_source != "storyboard":
+        plan = _ensure_story_spine(plan, document)
     plan["task_spec"] = task_spec
     _emit_progress(
         progress_callback,
@@ -1534,7 +1913,12 @@ def run_pipeline(
         max_total = max(max_total, len(design_plan if isinstance(design_plan, list) else design_plan.get("pages") or []))
 
     if len(plan.get("pages") or []) > max_total:
-        plan, condensation_report = condense_plan(plan, document, max_total=max_total)
+        plan, condensation_report = condense_plan(
+            plan,
+            document,
+            max_total=max_total,
+            drop_instead_of_merge=True,
+        )
         condensation_report["template_capacity"] = max_total
 
     annotated = annotate_plan(plan, analyzed)
@@ -1557,13 +1941,29 @@ def run_pipeline(
 
     design_plan_source = "auto"
     rendered_pages: int | None = None
+    layout_plan_summary: list[dict[str, Any]] = []
     if route == "clone" and template_path:
         pptx_path = out / "deck.pptx"
         if design_plan:
             clone_pages = _coerce_design_plan(design_plan)
             design_plan_source = "external"
         else:
-            clone_pages = _plan_to_clone_pages(annotated, document)
+            clone_pages = _plan_to_clone_pages(
+                annotated,
+                document,
+                template_catalog=template_catalog,
+            )
+        layout_plan_summary = [
+            {
+                "page": page_number,
+                "role": page.get("role"),
+                "kit": page.get("kit"),
+                "template_slide": page.get("template_slide"),
+                "template_component_id": page.get("template_component_id"),
+                "template_component_score": page.get("template_component_score"),
+            }
+            for page_number, page in enumerate(clone_pages, start=1)
+        ]
         # PREFERRED: clone the template's own page shells (byte-identical
         # chrome, inherited DNA per page kind). Only if the real clone path
         # cannot serve the plan do we degrade to synthetic blank-layout
@@ -1922,9 +2322,16 @@ def run_pipeline(
             },
             "fidelity": {"mode": route, "basis": mode_report.get("basis")},
             "repair": repair_report,
+            "layout_plan": layout_plan_summary,
         },
         "design_plan": {"source": design_plan_source},
         "storyboard": storyboard,
+        "template_components": {
+            "schema": (template_catalog or {}).get("schema"),
+            "template_hash": (template_catalog or {}).get("template_hash"),
+            "component_count": (template_catalog or {}).get("component_count"),
+            "components": _template_catalog_summary(template_catalog),
+        } if template_catalog else None,
         "artifacts": artifacts,
         "clone_audit": audit_report,
         "element_cache": _element_cache_for_report(route, artifacts),

@@ -683,12 +683,17 @@ def _inplace_text(slide, old_markers, new_text, *, multi=False):
 
 
 def _iter_text_shapes(slide):
-    for sh in slide.shapes:
-        try:
-            if sh.has_text_frame and sh.text_frame.text.strip():
-                yield sh
-        except Exception:
-            continue
+    def walk(shapes):
+        for sh in shapes:
+            try:
+                if sh.shape_type == 6:
+                    yield from walk(sh.shapes)
+                elif sh.has_text_frame and sh.text_frame.text.strip():
+                    yield sh
+            except Exception:
+                continue
+
+    yield from walk(slide.shapes)
 
 
 def _font_size_pt(sh):

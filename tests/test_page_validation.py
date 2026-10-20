@@ -2,6 +2,7 @@ from pathlib import Path
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
+from pptx.util import Inches
 
 from ppt_agent.page_validation import (
     infer_page_role,
@@ -69,3 +70,24 @@ def test_gate_does_not_guess_unresolved_text_color_on_dark_background(tmp_path: 
 
     assert report.passed
     assert not any("contrast" in issue.lower() for issue in report.pages[0].issues)
+
+
+def test_gate_allows_inherited_decorative_bleed(tmp_path: Path):
+    image = tmp_path / "background.png"
+    Image.new("RGB", (100, 100), "blue").save(image)
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_picture(
+        str(image),
+        Inches(0),
+        Inches(-0.07),
+        width=prs.slide_width,
+        height=Inches(4.72),
+    )
+    pptx_path = tmp_path / "decorative-bleed.pptx"
+    prs.save(pptx_path)
+
+    report = validate_structural_pages(pptx_path)
+
+    assert report.passed
+    assert not any("outside slide bounds" in issue for issue in report.pages[0].issues)

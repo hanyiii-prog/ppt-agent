@@ -333,6 +333,41 @@ def test_resolve_provider_wraps_host_with_fallbacks(monkeypatch) -> None:
     assert provider.chat([ChatMessage("user", "hello")]) == "host"
 
 
+def test_resolve_provider_wraps_direct_with_configured_fallbacks() -> None:
+    provider, warning = resolve_provider(
+        None,
+        environ={
+            "PPT_AGENT_API_BASE_URL": "https://api.example/v1",
+            "PPT_AGENT_API_KEY": "fresh-secret",
+            "PPT_AGENT_MODEL": "deepseek-v4-flash",
+            "PPT_AGENT_FALLBACK_API_BASE_URL": "https://fallback.example",
+            "PPT_AGENT_FALLBACK_API_KEY": "fallback-secret",
+            "PPT_AGENT_FALLBACK_MODELS": "[free]kimi-k3",
+        },
+    )
+
+    assert warning is None
+    assert isinstance(provider, FallbackProvider)
+    assert isinstance(provider.primary, OpenAIResponsesProvider)
+    assert provider.primary.model_name == "deepseek-v4-flash"
+    assert [item.model_name for item in provider.fallbacks] == ["[free]kimi-k3"]
+
+
+def test_resolve_provider_uses_fallback_model_when_no_primary_exists() -> None:
+    provider, warning = resolve_provider(
+        None,
+        environ={
+            "PPT_AGENT_FALLBACK_API_BASE_URL": "https://fallback.example",
+            "PPT_AGENT_FALLBACK_API_KEY": "fallback-secret",
+            "PPT_AGENT_FALLBACK_MODELS": "[free]kimi-k3",
+        },
+    )
+
+    assert isinstance(provider, ChatCompletionsProvider)
+    assert provider.model_name == "[free]kimi-k3"
+    assert warning and "兜底" in warning
+
+
 def test_provider_resolution_uses_sampling_when_direct_configuration_is_partial() -> None:
     session = FakeSession(supported=True, result=_sampling_result("host"))
     provider, warning = resolve_provider(

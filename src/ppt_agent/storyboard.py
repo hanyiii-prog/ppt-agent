@@ -24,7 +24,46 @@ _VISUAL_KITS = frozenset({
     "matrix_table",
     "architecture_layers",
     "four_role_cards",
+    "org_chart",
 })
+_VISUAL_KIT_ALIASES = {
+    "metrics": "quad_cards",
+    "metric_cards": "quad_cards",
+    "metrics_row": "quad_cards",
+    "kpi_cards": "quad_cards",
+    "cards": "column_cards",
+    "card_grid": "column_cards",
+    "cards_grid": "column_cards",
+    "comparison": "two_panel_list",
+    "contrast": "two_panel_list",
+    "timeline": "progress_timeline",
+    "milestones": "progress_timeline",
+    "phase_timeline": "stage_timeline",
+    "steps": "stage_cards",
+    "process": "stage_cards",
+    "process_steps": "stage_cards",
+    "table": "matrix_table",
+    "table_page": "matrix_table",
+    "data_table": "matrix_table",
+    "raci": "four_role_cards",
+    "roles": "four_role_cards",
+    "responsibility": "four_role_cards",
+    "layers": "architecture_layers",
+    "architecture": "architecture_layers",
+    "org": "org_chart",
+    "organization": "org_chart",
+    "organization_chart": "org_chart",
+    "orgchart": "org_chart",
+}
+_LAYOUT_ALIASES = {
+    "dashboard": "grid",
+    "cards": "grid",
+    "card_grid": "grid",
+    "columns": "split",
+    "timeline": "wide",
+    "process": "wide",
+    "full": "wide",
+}
 _HEX = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
 STORYBOARD_SCHEMA = {
@@ -54,6 +93,7 @@ STORYBOARD_SCHEMA = {
                     "archetype": {"type": "string"},
                     "layout_variant": {"type": "string"},
                     "visual_kit": {"type": "string"},
+                    "template_component_id": {"type": "string"},
                     "table_row_ranges": {
                         "type": "array",
                         "items": {
@@ -167,6 +207,7 @@ def normalize_storyboard(
         )
 
     normalized: list[dict[str, Any]] = []
+    storyboard_warnings: list[str] = []
     used_ids: set[str] = set()
     for index, entry in enumerate(slides, start=1):
         if not isinstance(entry, dict):
@@ -194,15 +235,32 @@ def normalize_storyboard(
         if archetype not in ARCHETYPES:
             archetype = ""
         layout_variant = str(entry.get("layout_variant") or "standard").strip().lower()
+        if layout_variant in _LAYOUT_ALIASES:
+            storyboard_warnings.append(
+                f"slides[{index - 1}] aliased layout_variant {layout_variant!r} "
+                f"to {_LAYOUT_ALIASES[layout_variant]!r}"
+            )
+            layout_variant = _LAYOUT_ALIASES[layout_variant]
         if layout_variant not in _LAYOUT_VARIANTS:
-            raise StoryboardValidationError(
-                f"slides[{index - 1}] has unsupported layout_variant {layout_variant!r}"
+            storyboard_warnings.append(
+                f"slides[{index - 1}] has unsupported layout_variant "
+                f"{layout_variant!r}; using 'standard'"
             )
+            layout_variant = "standard"
         visual_kit = str(entry.get("visual_kit") or "").strip().lower()
-        if visual_kit and visual_kit not in _VISUAL_KITS:
-            raise StoryboardValidationError(
-                f"slides[{index - 1}] has unsupported visual_kit {visual_kit!r}"
+        if visual_kit in _VISUAL_KIT_ALIASES:
+            aliased = _VISUAL_KIT_ALIASES[visual_kit]
+            storyboard_warnings.append(
+                f"slides[{index - 1}] aliased visual_kit {visual_kit!r} "
+                f"to {aliased!r}"
             )
+            visual_kit = aliased
+        elif visual_kit and visual_kit not in _VISUAL_KITS:
+            storyboard_warnings.append(
+                f"slides[{index - 1}] has unsupported visual_kit "
+                f"{visual_kit!r}; the page will use automatic layout"
+            )
+            visual_kit = ""
         evidence_ids = _string_list(entry.get("evidence_ids"))
         unknown_evidence = [evidence_id for evidence_id in evidence_ids if evidence_id not in source_ids]
         if unknown_evidence:
@@ -220,6 +278,9 @@ def normalize_storyboard(
             "key_message": str(entry.get("key_message") or "").strip(),
             "visual_form": str(entry.get("visual_form") or "").strip(),
             "visual_kit": visual_kit,
+            "template_component_id": str(
+                entry.get("template_component_id") or ""
+            ).strip(),
             "table_row_ranges": table_row_ranges,
             "archetype_name": archetype,
             "layout_variant": layout_variant,
@@ -277,7 +338,7 @@ def normalize_storyboard(
         "slides": normalized,
         "omitted_source_blocks": normalized_omissions,
         "unmapped_source_block_ids": [],
-        "warnings": palette_warnings + task_warnings,
+        "warnings": storyboard_warnings + palette_warnings + task_warnings,
     }
 
 
@@ -316,6 +377,7 @@ def _call_storyboard_llm(llm_fn: Callable[[str], str], prompt: str) -> str:
     if callable(chat):
         return chat(
             [ChatMessage(role="user", content=prompt)],
+            max_tokens=24000,
             response_schema=STORYBOARD_SCHEMA,
         )
     return llm_fn(prompt)
@@ -357,6 +419,7 @@ def storyboard_to_plan(
             "key_message": slide.get("key_message") or "",
             "visual_form": slide.get("visual_form") or "",
             "visual_kit": slide.get("visual_kit") or "",
+            "template_component_id": slide.get("template_component_id") or "",
             "table_row_ranges": slide.get("table_row_ranges") or [],
             "layout_variant": slide.get("layout_variant") or "standard",
             "evidence_ids": list(slide.get("evidence_ids") or []),
@@ -496,6 +559,7 @@ def repair_storyboard_plan(
             ),
             "current_layout_variant": page.get("layout_variant") or "standard",
             "current_visual_kit": page.get("visual_kit") or "",
+            "current_template_component_id": page.get("template_component_id") or "",
             "source_blocks": sources,
             "findings": blocking[page_no],
         })
@@ -511,7 +575,8 @@ def repair_storyboard_plan(
         'comparison|narrative|quote_strip","layout_variant":"standard|split|wide|'
         'grid|compact","visual_kit":"quad_cards|column_cards|two_panel_list|'
         'stage_cards|progress_timeline|stage_timeline|architecture_layers|'
-        'four_role_cards","visual_form":"不超过120字的构图说明"}]}。\n'
+        'four_role_cards","template_component_id":"可选模板组件 id",'
+        '"visual_form":"不超过120字的构图说明"}]}。\n'
         "仅返回 findings 对应的 content 页面。不得返回其他字段或页面。\n"
         f"允许 archetype：{json.dumps(list(ARCHETYPES), ensure_ascii=False)}\n"
         f"页面与质检证据：{json.dumps(page_payloads, ensure_ascii=False, separators=(',', ':'))}"
@@ -548,7 +613,12 @@ def repair_storyboard_plan(
     applied: list[int] = []
     rejected = 0
     allowed_keys = {
-        "page_no", "archetype", "layout_variant", "visual_kit", "visual_form",
+        "page_no",
+        "archetype",
+        "layout_variant",
+        "visual_kit",
+        "template_component_id",
+        "visual_form",
     }
 
     for item in repairs:
@@ -575,6 +645,13 @@ def repair_storyboard_plan(
                     or len(item["visual_form"]) > 120
                 )
             )
+            or (
+                "template_component_id" in item
+                and (
+                    not isinstance(item["template_component_id"], str)
+                    or len(item["template_component_id"]) > 120
+                )
+            )
         ):
             rejected += 1
             continue
@@ -593,6 +670,10 @@ def repair_storyboard_plan(
                 "visual_form" in item
                 and page.get("visual_form", "") != item["visual_form"]
             )
+            or (
+                "template_component_id" in item
+                and page.get("template_component_id", "") != item["template_component_id"]
+            )
         )
         if not changed:
             continue
@@ -607,6 +688,8 @@ def repair_storyboard_plan(
             page["visual_kit"] = item["visual_kit"]
         if "visual_form" in item:
             page["visual_form"] = item["visual_form"]
+        if "template_component_id" in item:
+            page["template_component_id"] = item["template_component_id"]
         applied.append(page_no)
 
     missing = set(repairable) - returned
@@ -644,6 +727,7 @@ def _build_prompt(document: ContentDocument, constraints: dict[str, Any]) -> str
         '"title":"...","key_message":"...","source_block_ids":["原始 block id"],"visual_form":"...","archetype":'
         '"title_bullets|cards_grid|metrics_row|table_page|timeline|comparison|narrative|quote_strip",'
         '"layout_variant":"standard|split|wide|grid|compact","visual_kit":"可选原生组件",'
+        '"template_component_id":"若给出了模板组件候选，填写最合适的 component_id",'
         '"table_row_ranges":[{"table_id":"tbl-0007","start":1,"end":8}],'
         '"evidence_ids":["source block ID"],'
         '"speaker_notes":"..."}],"omitted_source_blocks":[{"id":"...","reason":"..."}]}.\n'
@@ -652,6 +736,8 @@ def _build_prompt(document: ContentDocument, constraints: dict[str, Any]) -> str
         "evidence_ids（若提供）必须与来源 block ID 完全一致。max_pages 是硬上限。"
         "palette 必须满足文本对比度。逐页选择 layout_variant；内容结构不同就不要重复同一种构图。\n"
         "content 页面可选 visual_kit，必须依据来源内容和数量选择，不适配时省略。"
+        "如果用户任务约束提供了 template_components，优先从其中选择最合适的 component_id，"
+        "填入 template_component_id；不得编造不存在的 id。"
         "组件：quad_cards（2-4个要点）、column_cards（多组内容）、two_panel_list（两侧比较）、"
         "stage_cards（2-4个阶段）、progress_timeline（2-8个节点）、stage_timeline（2-4个阶段）、"
         "matrix_table（2-10行通用表）、architecture_layers（3-8行架构表）、four_role_cards（3-5行职责表）。"

@@ -601,10 +601,18 @@ def resolve_provider(
         if fallbacks:
             return FallbackProvider(host, fallbacks), fallback_warning
         return host, fallback_warning
-    direct, warning = configured_provider(environ)
+    direct, direct_warning = configured_provider(environ)
+    fallbacks, fallback_warning = configured_fallback_providers(environ)
     if direct is not None:
-        return direct, None
-    return None, warning
+        if fallbacks:
+            return FallbackProvider(direct, fallbacks), fallback_warning
+        return direct, direct_warning
+    if fallbacks:
+        warning = fallback_warning or "未配置直连主模型，使用兜底模型"
+        if len(fallbacks) == 1:
+            return fallbacks[0], warning
+        return FallbackProvider(fallbacks[0], fallbacks[1:]), warning
+    return None, direct_warning or fallback_warning
 
 
 class RuleFallbackProvider:

@@ -113,6 +113,37 @@ class TestPipelineV22:
         assert report["source_blocks_merged"] == 1
         assert [page["page_no"] for page in condensed["pages"]] == [1, 2, 3, 4]
 
+    def test_quality_mode_drops_pages_without_merging_their_content(self):
+        document = parse_markdown(
+            "# Deck\n\n## Chapter\n\n"
+            + "\n\n".join(f"- Item {i}" for i in range(1, 9))
+        )
+        plan = {
+            "pages": [
+                {"page_no": 1, "kind": "cover", "title": "Deck", "source_blocks": []},
+                {"page_no": 2, "kind": "section", "title": "Chapter", "source_blocks": []},
+                {"page_no": 3, "kind": "content", "title": "Chapter",
+                 "source_blocks": [document.blocks[2].id]},
+                {"page_no": 4, "kind": "content", "title": "Chapter",
+                 "source_blocks": [document.blocks[3].id]},
+                {"page_no": 5, "kind": "closing", "title": "谢谢", "source_blocks": []},
+            ]
+        }
+
+        condensed, report = condense_plan(
+            plan,
+            document,
+            max_total=4,
+            drop_instead_of_merge=True,
+        )
+
+        assert report["pages_merged"] == 0
+        assert report["pages_dropped"] >= 1
+        assert len(condensed["pages"]) <= 4
+        assert any(page["kind"] == "section" for page in condensed["pages"])
+        for page in condensed["pages"]:
+            assert len(page.get("source_blocks") or []) <= 1
+
     def test_v22_schema(self, tmp_path):
         report = run_pipeline(SAMPLE, out_dir=tmp_path / "out")
         assert report["schema"] == "pipeline/v2"

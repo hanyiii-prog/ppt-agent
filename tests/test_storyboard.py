@@ -116,6 +116,54 @@ def test_storyboard_accepts_matrix_table_kit() -> None:
     assert storyboard["slides"][0]["visual_kit"] == "matrix_table"
 
 
+def test_storyboard_degrades_one_invalid_kit_without_losing_the_deck() -> None:
+    document = parse_markdown(SAMPLE)
+    source_ids = [block.id for block in document.blocks]
+    raw = {
+        "schema": "storyboard/v1",
+        "design_profile": {},
+        "slides": [{
+            "kind": "content",
+            "title": "Metrics",
+            "source_block_ids": source_ids,
+            "visual_kit": "metrics_row",
+            "layout_variant": "dashboard",
+        }],
+        "omitted_source_blocks": [],
+    }
+
+    storyboard = normalize_storyboard(raw, document)
+
+    slide = storyboard["slides"][0]
+    assert slide["visual_kit"] == "quad_cards"
+    assert slide["layout_variant"] == "grid"
+    assert any("metrics_row" in warning for warning in storyboard["warnings"])
+    assert any("dashboard" in warning for warning in storyboard["warnings"])
+
+
+def test_storyboard_preserves_template_component_choice() -> None:
+    document = parse_markdown(SAMPLE)
+    source_ids = [block.id for block in document.blocks]
+    raw = {
+        "schema": "storyboard/v1",
+        "design_profile": {},
+        "slides": [{
+            "kind": "content",
+            "title": "组织保障",
+            "source_block_ids": source_ids,
+            "visual_kit": "org_chart",
+            "template_component_id": "tpl-07-org_chart",
+        }],
+        "omitted_source_blocks": [],
+    }
+
+    storyboard = normalize_storyboard(raw, document)
+    plan = storyboard_to_plan(storyboard, document)
+
+    assert storyboard["slides"][0]["template_component_id"] == "tpl-07-org_chart"
+    assert plan["pages"][0]["template_component_id"] == "tpl-07-org_chart"
+
+
 def test_storyboard_enforces_json_schema_when_provider_supports_chat() -> None:
     document = parse_markdown(SAMPLE)
     source_ids = [block.id for block in document.blocks]
@@ -134,9 +182,11 @@ def test_storyboard_enforces_json_schema_when_provider_supports_chat() -> None:
     class SchemaChatLLM:
         def __init__(self):
             self.calls = []
+            self.max_tokens = []
 
-        def chat(self, _messages, *, response_schema=None, **_kwargs):
+        def chat(self, _messages, *, response_schema=None, max_tokens=1024, **_kwargs):
             self.calls.append(response_schema)
+            self.max_tokens.append(max_tokens)
             return json.dumps(raw)
 
     llm = SchemaChatLLM()
@@ -144,6 +194,7 @@ def test_storyboard_enforces_json_schema_when_provider_supports_chat() -> None:
 
     assert result["metadata"]["llm"] == "sampled"
     assert llm.calls == [STORYBOARD_SCHEMA]
+    assert llm.max_tokens == [24000]
 
 
 def test_storyboard_repairs_invalid_json_with_a_second_call() -> None:

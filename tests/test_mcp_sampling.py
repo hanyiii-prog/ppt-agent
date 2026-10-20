@@ -87,7 +87,13 @@ def test_sampling_capable_host_gets_model_planned_narrative(workspace: Path) -> 
     assert narrative["arc"] == ["项目成效", "项目概况", "上线总结"]
 
 
-def test_host_without_sampling_runs_rules_and_discloses_off(workspace: Path) -> None:
+def test_host_without_sampling_runs_rules_and_discloses_off(
+    workspace: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_API_BASE_URL", raising=False)
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_API_KEY", raising=False)
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_MODELS", raising=False)
     outputs = _run([INIT_PLAIN, INITIALIZED, _call_narrative()], workspace)
     narrative = _tool_payload(outputs[-1])
     assert narrative["metadata"]["llm"] == "off"
