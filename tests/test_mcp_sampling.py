@@ -98,7 +98,10 @@ def test_host_without_sampling_runs_rules_and_discloses_off(workspace: Path) -> 
     )
 
 
-def test_sampling_timeout_falls_back_and_discloses(workspace: Path) -> None:
+def test_sampling_timeout_falls_back_and_discloses(workspace: Path, monkeypatch) -> None:
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_API_BASE_URL", raising=False)
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_API_KEY", raising=False)
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_MODELS", raising=False)
     # sampling declared but the host goes silent: no response is scripted
     outputs = _run([INIT_WITH_SAMPLING, INITIALIZED, _call_narrative()], workspace,
                    sampling_timeout_s=0.2)
@@ -108,7 +111,10 @@ def test_sampling_timeout_falls_back_and_discloses(workspace: Path) -> None:
     assert narrative["arc"]
 
 
-def test_sampling_error_response_falls_back_and_discloses(workspace: Path) -> None:
+def test_sampling_error_response_falls_back_and_discloses(workspace: Path, monkeypatch) -> None:
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_API_BASE_URL", raising=False)
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_API_KEY", raising=False)
+    monkeypatch.delenv("PPT_AGENT_FALLBACK_MODELS", raising=False)
     lines: list = [
         INIT_WITH_SAMPLING,
         INITIALIZED,

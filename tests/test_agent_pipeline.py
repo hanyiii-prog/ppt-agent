@@ -130,6 +130,24 @@ def test_pipeline_reports_host_model_when_name_is_unavailable(tmp_path: Path) ->
     assert report["metadata"]["generation_model"] == "宿主模型"
 
 
+def test_pipeline_emits_user_facing_progress_events(tmp_path: Path) -> None:
+    events = []
+    report = run_pipeline(
+        SAMPLE,
+        out_dir=tmp_path / "dist-progress",
+        progress_callback=events.append,
+    )
+
+    stages = [event["stage"] for event in events]
+    assert stages[0] == "start"
+    assert {"source", "analyze", "render_start", "render_done"} <= set(stages)
+    assert "visual_review_start" in stages
+    assert "visual_review_done" in stages
+    assert stages[-1] == "done"
+    assert all(event["message"] and isinstance(event["detail"], dict) for event in events)
+    assert report["artifacts"]["pptx"]
+
+
 # ---- content-page integrity (blank control / duplicated heading fixes) ----
 
 _PAIRING_SAMPLE = """# 项目汇报

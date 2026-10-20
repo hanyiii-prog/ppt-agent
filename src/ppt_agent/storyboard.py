@@ -8,7 +8,7 @@ import re
 from typing import Any, Callable, Sequence
 
 from .content_ir import ContentDocument
-from .llm.provider import ImageAttachment
+from .llm.provider import ChatMessage, ImageAttachment
 from .page_archetype import ARCHETYPES, select_archetype
 
 SCHEMA = "storyboard/v1"
@@ -26,6 +26,69 @@ _VISUAL_KITS = frozenset({
     "four_role_cards",
 })
 _HEX = re.compile(r"^#?([0-9a-fA-F]{6})$")
+
+STORYBOARD_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["schema", "design_profile", "slides", "omitted_source_blocks"],
+    "properties": {
+        "schema": {"const": SCHEMA},
+        "design_profile": {"type": "object"},
+        "slides": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["kind", "title", "source_block_ids"],
+                "properties": {
+                    "kind": {
+                        "enum": ["cover", "toc", "section", "content", "closing"],
+                    },
+                    "title": {"type": "string"},
+                    "key_message": {"type": "string"},
+                    "source_block_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "visual_form": {"type": "string"},
+                    "archetype": {"type": "string"},
+                    "layout_variant": {"type": "string"},
+                    "visual_kit": {"type": "string"},
+                    "table_row_ranges": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["table_id", "start", "end"],
+                            "properties": {
+                                "table_id": {"type": "string"},
+                                "start": {"type": "integer", "minimum": 1},
+                                "end": {"type": "integer", "minimum": 1},
+                            },
+                        },
+                    },
+                    "evidence_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "speaker_notes": {"type": "string"},
+                },
+            },
+        },
+        "omitted_source_blocks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["id", "reason"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+            },
+        },
+    },
+}
 
 _DEFAULT_PALETTE = {
     "primary": "0B4A42",
@@ -146,6 +209,9 @@ def normalize_storyboard(
             raise StoryboardValidationError(
                 f"slides[{index - 1}] references unknown evidence ID {unknown_evidence[0]!r}"
             )
+        table_row_ranges = _normalize_table_row_ranges(
+            entry.get("table_row_ranges"), source_ids,
+        )
         normalized.append({
             "page_no": index,
             "kind": kind,
@@ -154,6 +220,7 @@ def normalize_storyboard(
             "key_message": str(entry.get("key_message") or "").strip(),
             "visual_form": str(entry.get("visual_form") or "").strip(),
             "visual_kit": visual_kit,
+            "table_row_ranges": table_row_ranges,
             "archetype_name": archetype,
             "layout_variant": layout_variant,
             "evidence_ids": evidence_ids or refs,
@@ -220,6 +287,50 @@ def _string_list(value: Any) -> list[str]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
+def _normalize_table_row_ranges(
+    value: Any,
+    source_ids: set[str],
+) -> list[dict[str, int | str]]:
+    """Keep only usable, source-backed 1-based table row windows."""
+    if not isinstance(value, list):
+        return []
+    ranges: list[dict[str, int | str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        table_id = str(item.get("table_id") or item.get("id") or "").strip()
+        try:
+            start = int(item.get("start"))
+            end = int(item.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if not table_id or table_id not in source_ids or start < 1 or end < start:
+            continue
+        ranges.append({"table_id": table_id, "start": start, "end": end})
+    return ranges
+
+
+def _call_storyboard_llm(llm_fn: Callable[[str], str], prompt: str) -> str:
+    """Prefer provider chat so storyboard JSON schema can be enforced."""
+    chat = getattr(llm_fn, "chat", None)
+    if callable(chat):
+        return chat(
+            [ChatMessage(role="user", content=prompt)],
+            response_schema=STORYBOARD_SCHEMA,
+        )
+    return llm_fn(prompt)
+
+
+def _json_repair_prompt(raw_response: str, error: Exception) -> str:
+    return (
+        "上一条 storyboard JSON 未能通过校验。请修复为合法、完整的 storyboard JSON，"
+        "不要解释、不要 Markdown 围栏。必须严格保持 storyboard/v1 契约，"
+        "保留来源 block ID，不新增事实，不超过 max_pages。"
+        f"\n校验错误：{error}"
+        f"\n上一条回答（可能被截断）：\n{str(raw_response)[:12000]}"
+    )
+
+
 def storyboard_to_plan(
     storyboard: dict[str, Any],
     document: ContentDocument,
@@ -246,6 +357,7 @@ def storyboard_to_plan(
             "key_message": slide.get("key_message") or "",
             "visual_form": slide.get("visual_form") or "",
             "visual_kit": slide.get("visual_kit") or "",
+            "table_row_ranges": slide.get("table_row_ranges") or [],
             "layout_variant": slide.get("layout_variant") or "standard",
             "evidence_ids": list(slide.get("evidence_ids") or []),
             "speaker_notes": slide.get("speaker_notes"),
@@ -272,14 +384,22 @@ def build_storyboard(
     """Ask the model for a constrained storyboard; report honest fallback state."""
     if llm_fn is None:
         return {"storyboard": None, "metadata": {"llm": "off"}, "error": None}
+    raw_response: str | None = None
     try:
         prompt = _build_prompt(document, constraints or {})
         image_call = getattr(llm_fn, "with_images", None)
         if reference_images and getattr(llm_fn, "supports_vision", False) is True and callable(image_call):
             raw_response = image_call(prompt, tuple(reference_images))
         else:
-            raw_response = llm_fn(prompt)
-        storyboard = normalize_storyboard(raw_response, document, constraints=constraints)
+            raw_response = _call_storyboard_llm(llm_fn, prompt)
+        try:
+            storyboard = normalize_storyboard(raw_response, document, constraints=constraints)
+        except Exception as exc:
+            raw_response = _call_storyboard_llm(
+                llm_fn,
+                _json_repair_prompt(raw_response or "", exc),
+            )
+            storyboard = normalize_storyboard(raw_response, document, constraints=constraints)
     except Exception as exc:  # a malformed model response must not stop delivery
         return {
             "storyboard": None,
@@ -524,6 +644,7 @@ def _build_prompt(document: ContentDocument, constraints: dict[str, Any]) -> str
         '"title":"...","key_message":"...","source_block_ids":["原始 block id"],"visual_form":"...","archetype":'
         '"title_bullets|cards_grid|metrics_row|table_page|timeline|comparison|narrative|quote_strip",'
         '"layout_variant":"standard|split|wide|grid|compact","visual_kit":"可选原生组件",'
+        '"table_row_ranges":[{"table_id":"tbl-0007","start":1,"end":8}],'
         '"evidence_ids":["source block ID"],'
         '"speaker_notes":"..."}],"omitted_source_blocks":[{"id":"...","reason":"..."}]}.\n'
         "每个原始 block ID 必须至少出现在一个页面的 source_block_ids 中；确需删去的内容必须逐项列在 "
@@ -535,6 +656,8 @@ def _build_prompt(document: ContentDocument, constraints: dict[str, Any]) -> str
         "stage_cards（2-4个阶段）、progress_timeline（2-8个节点）、stage_timeline（2-4个阶段）、"
         "matrix_table（2-10行通用表）、architecture_layers（3-8行架构表）、four_role_cards（3-5行职责表）。"
         "架构/职责表优先用对应原生可编辑图示；不得把无层级数据伪造成组织图。\n"
+        "如果同一张表格要拆成多页，每页必须提供 table_row_ranges，并用 start/end 精确标记该页使用的 1-based 数据行范围；"
+        "不同页的行范围不得重复，也不要把整张大表塞到一页。\n"
         f"用户任务约束：{json.dumps(constraints, ensure_ascii=False, separators=(',', ':'))}\n"
         f"文档标题：{document.title or ''}\n"
         f"来源内容块：{json.dumps(blocks, ensure_ascii=False, separators=(',', ':'))}"

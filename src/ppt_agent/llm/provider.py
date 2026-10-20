@@ -683,6 +683,21 @@ class ProviderLLMFunction:
             max_tokens=2048,
         )
 
+    def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        system: str | None = None,
+        max_tokens: int = 1024,
+        response_schema: dict[str, Any] | None = None,
+    ) -> str:
+        return self.provider.chat(
+            messages,
+            system=system,
+            max_tokens=max_tokens,
+            response_schema=response_schema,
+        )
+
     def with_images(
         self,
         prompt: str,

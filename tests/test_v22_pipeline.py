@@ -259,8 +259,9 @@ class TestPipelineV22:
         }
         gate_calls = []
 
-        def fake_gate(self, *_args, **_kwargs):
+        def fake_gate(self, *_args, **kwargs):
             gate_calls.append(True)
+            gate_kwargs.append(kwargs)
             passed = len(gate_calls) > 1
             return {
                 "passed": passed,
@@ -279,6 +280,7 @@ class TestPipelineV22:
 
         monkeypatch.setattr(PptAgent, "gate", fake_gate)
         prompts = []
+        gate_kwargs: list[dict] = []
 
         def fake_llm(prompt: str) -> str:
             prompts.append(prompt)
@@ -304,6 +306,7 @@ class TestPipelineV22:
 
         assert report["gates"]["delivery"]["passed"] is True
         assert len(gate_calls) == 2
+        assert "pages" not in gate_kwargs[-1]
         assert report["storyboard"]["slides"][1]["layout_variant"] == "wide"
         assert report["storyboard"]["slides"][1]["archetype_name"] == "narrative"
         loop = report["stages"]["repair"]["delivery_loop"]

@@ -199,6 +199,27 @@ class TestVisualKitSelection:
         assert pages[2]["table"]["rows"][0][0] == "15"
         assert pages[3]["table"]["rows"][-1][0] == "28"
 
+    def test_storyboard_row_ranges_materialize_only_selected_rows(self):
+        rows = "".join(f"| {i} | Topic {i} | Owner {i} |\n" for i in range(1, 13))
+        document = parse_markdown(
+            "# Requirements\n\n"
+            "| Page | Topic | Owner |\n| --- | --- | --- |\n" + rows
+        )
+        table = next(block for block in document.blocks if block.type == "table")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Outline window",
+                "source_blocks": [table.id],
+                "visual_kit": "matrix_table",
+                "table_row_ranges": [{"table_id": table.id, "start": 4, "end": 8}],
+            }],
+        }, document)
+
+        assert len(pages) == 1
+        assert pages[0]["kit"] == "matrix_table"
+        assert [row[0] for row in pages[0]["table"]["rows"]] == ["4", "5", "6", "7", "8"]
+
     def test_architecture_semantics_select_layers_without_explicit_kit(self):
         document = parse_markdown(
             "# Platform\n\n## Architecture\n\n"
@@ -301,6 +322,41 @@ class TestKitDiversity:
         ]
         result = _diversify_kits(pages)
         assert result == pages
+
+
+class TestSparsePageGuards:
+    def test_title_only_sections_are_not_rendered_as_sparse_dividers(self):
+        document = parse_markdown(
+            "# Report\n\n## Results\n\n- Revenue reached 91%\n"
+        )
+        heading = next(block for block in document.blocks if block.type == "heading" and block.level == 2)
+        bullet = next(block for block in document.blocks if block.type == "bullets")
+        pages = _plan_to_clone_pages({
+            "pages": [
+                {"kind": "section", "title": "Results", "source_blocks": [heading.id]},
+                {"kind": "content", "title": "Results", "source_blocks": [bullet.id]},
+            ],
+        }, document)
+
+        assert [page["role"] for page in pages] == ["content"]
+
+    def test_one_sided_two_panel_falls_back_to_cards(self):
+        document = parse_markdown(
+            "# Report\n\n- Only one observation\n"
+        )
+        bullet = next(block for block in document.blocks if block.type == "bullets")
+        pages = _plan_to_clone_pages({
+            "pages": [{
+                "kind": "content",
+                "title": "Comparison",
+                "source_blocks": [bullet.id],
+                "visual_form": "左右对比",
+            }],
+        }, document)
+
+        assert pages[0]["kit"] != "two_panel_list"
+        assert "left" not in pages[0]
+        assert "right" not in pages[0]
 
 
 class TestCoerceDesignPlan:

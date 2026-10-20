@@ -26,6 +26,7 @@ import re
 from typing import Any, Callable
 
 from .content_ir import ContentDocument
+from .llm.provider import ChatMessage
 
 SCHEMA = "narrative/v1"
 
@@ -61,7 +62,7 @@ def build_narrative(
     """Narrative plan over a ContentDocument; LLM optional, fallback mandatory."""
     if llm_fn is not None:
         try:
-            llm_text = llm_fn(_build_llm_prompt(document))
+            llm_text = _call_narrative_llm(llm_fn, _build_llm_prompt(document))
         except Exception:  # noqa: BLE001 -- any LLM failure must degrade, never abort
             return _rules_narrative(document, llm="fallback")
         return {
@@ -72,6 +73,14 @@ def build_narrative(
             "metadata": {"llm": "sampled"},
         }
     return _rules_narrative(document, llm="off")
+
+
+def _call_narrative_llm(llm_fn: Callable[[str], str], prompt: str) -> str:
+    """Use provider chat transport when available; sampling failures degrade."""
+    chat = getattr(llm_fn, "chat", None)
+    if callable(chat):
+        return chat([ChatMessage(role="user", content=prompt)])
+    return llm_fn(prompt)
 
 
 def _build_llm_prompt(document: ContentDocument) -> str:

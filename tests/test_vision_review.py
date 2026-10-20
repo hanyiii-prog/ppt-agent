@@ -185,7 +185,7 @@ def test_generate_selects_visual_reviewer_only_when_host_declares_vision(
     tool_generate({"markdown": "# Report"}, context)
 
     assert captured["visual_critic"] is None
-    assert "未声明" in captured["visual_review_reason"]
+    assert "文本模型" in captured["visual_review_reason"]
 
     session.vision_supported = True
     captured.clear()
@@ -208,7 +208,7 @@ def test_generate_selects_visual_reviewer_only_when_host_declares_vision(
     tool_generate({"markdown": "# Report"}, context)
 
     assert captured["visual_critic"] is None
-    assert "不支持图像输入" in captured["visual_review_reason"]
+    assert "文本模型" in captured["visual_review_reason"]
 
 
 def test_generate_rejects_declared_vision_when_probe_fails(

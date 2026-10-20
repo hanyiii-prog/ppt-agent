@@ -32,6 +32,22 @@ from ..sdk import PptAgent
 
 SCHEMA = "pipeline/v2"
 MAX_TOTAL_PAGES = 25
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _emit_progress(
+    callback: ProgressCallback | None,
+    stage: str,
+    message: str,
+    **detail: Any,
+) -> None:
+    """Emit one user-facing pipeline stage; a broken callback must not block delivery."""
+    if callback is None:
+        return
+    try:
+        callback({"stage": stage, "message": message, "detail": detail})
+    except Exception:
+        return
 
 
 def _detect_rasterizer() -> bool:
@@ -847,6 +863,36 @@ def _table_rows_for_title(rows: list[list[str]], title: str) -> list[list[str]]:
     ]
 
 
+def _apply_table_row_ranges(
+    blocks: list,
+    ranges: list[dict[str, Any]] | None,
+) -> list:
+    """Materialize only the table rows a storyboard page claims to use."""
+    if not ranges:
+        return blocks
+    filtered: list = []
+    for block in blocks:
+        block_ranges = [
+            item for item in ranges
+            if str(item.get("table_id") or "") == block.id
+        ]
+        if not block_ranges:
+            filtered.append(block)
+            continue
+        selected_rows: list[list[str]] = []
+        for item in block_ranges:
+            try:
+                start = max(1, int(item.get("start")))
+                end = max(start, int(item.get("end")))
+            except (TypeError, ValueError):
+                continue
+            selected_rows.extend(block.rows[start - 1:end])
+        clone = _copy.copy(block)
+        clone.rows = selected_rows
+        filtered.append(clone)
+    return filtered
+
+
 _DATE_RE = re.compile(
     r"(20\d{2})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*[日号])?"
     r"|(?<!\d)(20\d{2})[./-](\d{1,2})(?:[./-](\d{1,2}))?"
@@ -1072,9 +1118,15 @@ def _plan_to_clone_pages(
                     lines.extend(b.items[:3])
                 elif b.text:
                     lines.append(b.text)
+            section_title = str(page.get("title") or "")
+            lines = [line for line in lines if line and line != section_title]
+            if not lines:
+                # A divider with only its own title is a sparse page, not a
+                # narrative step. Skip it and let content pages carry the flow.
+                continue
             pages.append({
                 "role": "section",
-                "title": page.get("title") or "",
+                "title": section_title,
                 "lines": lines[:3],
                 "chapter_num": f"{_section_count:02d}",
             })
@@ -1087,6 +1139,14 @@ def _plan_to_clone_pages(
                 "meta": doc_title,
             })
         else:
+            block_texts = [b.text or "" for b in blocks if b.text]
+            for b in blocks:
+                if b.type in ("bullets", "ordered"):
+                    block_texts.extend(b.items or [])
+            blocks = _apply_table_row_ranges(
+                blocks,
+                page.get("table_row_ranges"),
+            )
             block_texts = [b.text or "" for b in blocks if b.text]
             for b in blocks:
                 if b.type in ("bullets", "ordered"):
@@ -1147,8 +1207,15 @@ def _plan_to_clone_pages(
                 spec["steps"] = _blocks_to_steps(blocks)
             elif kit == "two_panel_list":
                 left, right = _blocks_to_two_panel(blocks, visual_form=page.get("visual_form") or "")
-                spec["left"] = left
-                spec["right"] = right
+                if left.get("rows") and right.get("rows"):
+                    spec["left"] = left
+                    spec["right"] = right
+                else:
+                    kit = "column_cards"
+                    spec["kit"] = kit
+                    spec["cards"] = _blocks_to_column_cards(
+                        blocks, page_title=page_title,
+                    )
             elif kit == "stage_cards":
                 spec["stages"] = _blocks_to_stages(blocks, page_title=page_title)
             elif kit == "stage_timeline":
@@ -1175,7 +1242,6 @@ def _plan_to_clone_pages(
                 ] or [[]]
                 if len(row_chunks) == 1:
                     spec["table"] = {"headers": table_contract["headers"], "rows": row_chunks[0]}
-                    pages.append(spec)
                 else:
                     for chunk_no, rows_chunk in enumerate(row_chunks, start=1):
                         spec = {
@@ -1220,11 +1286,13 @@ def run_pipeline(
     reference_html_path: str | Path | None = None,
     reference_pdf_path: str | Path | None = None,
     max_visual_iterations: int = 3,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Markdown -> delivered deck + the full decision report."""
     agent = agent or PptAgent()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    _emit_progress(progress_callback, "start", "开始生成演示文稿")
     if gate_deck and visual_critic is None and visual_review_reason is None:
         visual_review_reason = (
             "未声明或启用经确认的视觉模型；将退回确定性检查，"
@@ -1251,6 +1319,7 @@ def run_pipeline(
         fingerprint = check_template_consistency(design_dna, template_dna or {})
 
     document = parse_markdown(markdown, source="pipeline")
+    _emit_progress(progress_callback, "source", "已读取源材料")
     task_spec = task_spec if isinstance(task_spec, dict) else {}
     html_reference_report: dict[str, Any] = {
         "used": False,
@@ -1379,6 +1448,18 @@ def run_pipeline(
                     ),
                 })
     analyzed = analyze_content(document)
+    _emit_progress(
+        progress_callback,
+        "analyze",
+        "内容分析完成",
+        block_count=len(document.blocks),
+    )
+    _emit_progress(
+        progress_callback,
+        "storyboard_start",
+        "正在生成页面故事板",
+        model=bool(llm_fn),
+    )
     storyboard_result = build_storyboard(
         analyzed,
         llm_fn=llm_fn,
@@ -1386,6 +1467,16 @@ def run_pipeline(
         reference_images=pdf_reference_images,
     )
     storyboard = storyboard_result["storyboard"]
+    if storyboard is not None:
+        _emit_progress(progress_callback, "storyboard_done", "页面故事板生成完成")
+    elif llm_fn is not None and storyboard_result.get("raw_response") is not None:
+        _emit_progress(
+            progress_callback,
+            "storyboard_fallback",
+            "模型规划未通过校验，已回退规则规划",
+        )
+    else:
+        _emit_progress(progress_callback, "storyboard_done", "已用规则规划生成页面结构")
     if storyboard is not None:
         narrative = build_narrative(analyzed)
         narrative["mode"] = "storyboard"
@@ -1452,6 +1543,7 @@ def run_pipeline(
         # cannot serve the plan do we degrade to synthetic blank-layout
         # drawing -- and that degradation is disclosed, never silent.
         from ..clone_build import render_clone_deck
+        _emit_progress(progress_callback, "render_start", "正在渲染模板路线页面")
         try:
             clone_result = render_clone_deck(
                 template_path, clone_pages, pptx_path,
@@ -1460,6 +1552,12 @@ def run_pipeline(
             )
             artifacts["pptx"] = str(pptx_path)
             rendered_pages = int(clone_result.get("pages") or len(clone_pages))
+            _emit_progress(
+                progress_callback,
+                "render_done",
+                "模板路线页面渲染完成",
+                page_count=rendered_pages,
+            )
             artifacts["clone_audit"] = {
                 "warnings": clone_result.get("warnings", []),
                 "fidelity": clone_result.get("fidelity", {}),
@@ -1484,6 +1582,12 @@ def run_pipeline(
                 )
                 artifacts["pptx"] = str(pptx_path)
                 rendered_pages = int(clone_result.get("pages") or len(clone_pages))
+                _emit_progress(
+                    progress_callback,
+                    "render_done",
+                    "备用路线页面渲染完成",
+                    page_count=rendered_pages,
+                )
                 artifacts["clone_audit"] = {"warnings": clone_result.get("warnings", [])}
                 audit_report = {"warnings": clone_result.get("warnings", [])}
                 fallback_reason = (
@@ -1503,6 +1607,7 @@ def run_pipeline(
     if route == "designed":
         from ..agent.plan_to_ir import plan_to_ir
         from ..repair import run_repair_cycle
+        _emit_progress(progress_callback, "render_start", "正在渲染原创路线页面")
         presentation, element_cache = plan_to_ir(
             annotated, analyzed, title=document.title,
             llm_fn=llm_fn, template_fingerprint=fingerprint, layout_engine=engine,
@@ -1521,6 +1626,11 @@ def run_pipeline(
         artifacts["pptx"] = str(pptx_path)
         artifacts["html"] = str(html_path)
         artifacts["element_cache"] = element_cache
+        _emit_progress(
+            progress_callback,
+            "render_done",
+            "原创路线页面渲染完成",
+        )
 
     gate_report = {"passed": None, "mode": "skipped"}
     visual_review = {
@@ -1531,6 +1641,7 @@ def run_pipeline(
     has_gate_deck = bool(artifacts.get("pptx")) and Path(artifacts["pptx"]).exists()
     if gate_deck and has_gate_deck:
         try:
+            _emit_progress(progress_callback, "visual_review_start", "正在做页面视觉审阅")
             gate_report = agent.gate(
                 Path(artifacts["pptx"]),
                 workspace=out / "qa",
@@ -1544,6 +1655,12 @@ def run_pipeline(
                 "mode": gate_report.get("mode", "unknown"),
                 "warning": visual_review_reason,
             }
+            _emit_progress(
+                progress_callback,
+                "visual_review_done",
+                "页面视觉审阅完成",
+                status=visual_review.get("status"),
+            )
         except Exception as exc:
             gate_report = {"passed": False, "mode": "error", "error": str(exc)}
             visual_review = {
@@ -1580,6 +1697,12 @@ def run_pipeline(
             visual_repair_report["repair_mode"] = "text_only"
         else:
             visual_repair_report["repair_mode"] = "full"
+        _emit_progress(
+            progress_callback,
+            "repair_start",
+            "进入视觉修复循环",
+            mode=visual_repair_report["repair_mode"],
+        )
         iteration_budget = max(1, min(int(max_visual_iterations), MAX_VISUAL_ITERATIONS))
         previous_finding_count = _finding_count(gate_report)
         previous_ssim: float | None = None
@@ -1598,6 +1721,12 @@ def run_pipeline(
                 "findings": repair_requests,
                 **repair_attempt,
             }
+            _emit_progress(
+                progress_callback,
+                "repair_iteration",
+                "视觉修复迭代完成",
+                iteration=iteration,
+            )
             visual_repair_report["iterations"].append(attempt_report)
             if not repair_attempt.get("applied_pages"):
                 visual_repair_report["stop_reason"] = repair_attempt.get(
@@ -1650,17 +1779,12 @@ def run_pipeline(
                     artifacts["pptx"] = str(pptx_path)
                     artifacts["html"] = str(html_path)
                     artifacts["element_cache"] = element_cache
-                repaired_pages = sorted(
-                    int(p) for p in (repair_attempt.get("applied_pages") or [])
-                    if isinstance(p, (int, float)) or (isinstance(p, str) and p.isdigit())
-                )
                 gate_report = agent.gate(
                     Path(artifacts["pptx"]),
                     workspace=out / "qa",
                     reference=reference_pptx,
                     critic=visual_critic,
                     visual_review_reason=visual_review_reason,
-                    pages=repaired_pages or None,
                 )
                 _run_deck_gate(gate_report, out, agent, visual_critic)
                 visual_review = gate_report.get("visual_review") or {
@@ -1720,6 +1844,13 @@ def run_pipeline(
             artifacts["editability"] = {"passed": False, "error": str(exc)}
 
     has_rasterizer = _detect_rasterizer()
+    _emit_progress(
+        progress_callback,
+        "done",
+        "演示文稿生成完成",
+        route=route,
+        page_total=rendered_pages if rendered_pages is not None else len(annotated.get("pages") or []),
+    )
 
     return {
         "schema": SCHEMA,

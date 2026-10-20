@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ppt_agent.parsers import parse_markdown
 from ppt_agent.storyboard import (
+    STORYBOARD_SCHEMA,
     StoryboardValidationError,
+    build_storyboard,
     normalize_storyboard,
     storyboard_to_plan,
 )
@@ -110,6 +114,68 @@ def test_storyboard_accepts_matrix_table_kit() -> None:
 
     storyboard = normalize_storyboard(raw, document)
     assert storyboard["slides"][0]["visual_kit"] == "matrix_table"
+
+
+def test_storyboard_enforces_json_schema_when_provider_supports_chat() -> None:
+    document = parse_markdown(SAMPLE)
+    source_ids = [block.id for block in document.blocks]
+    raw = {
+        "schema": "storyboard/v1",
+        "design_profile": {},
+        "slides": [{
+            "kind": "content",
+            "title": "Matrix",
+            "source_block_ids": source_ids,
+            "visual_kit": "matrix_table",
+        }],
+        "omitted_source_blocks": [],
+    }
+
+    class SchemaChatLLM:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, _messages, *, response_schema=None, **_kwargs):
+            self.calls.append(response_schema)
+            return json.dumps(raw)
+
+    llm = SchemaChatLLM()
+    result = build_storyboard(document, llm_fn=llm)
+
+    assert result["metadata"]["llm"] == "sampled"
+    assert llm.calls == [STORYBOARD_SCHEMA]
+
+
+def test_storyboard_repairs_invalid_json_with_a_second_call() -> None:
+    document = parse_markdown(SAMPLE)
+    source_ids = [block.id for block in document.blocks]
+    raw = {
+        "schema": "storyboard/v1",
+        "design_profile": {},
+        "slides": [{
+            "kind": "content",
+            "title": "Matrix",
+            "source_block_ids": source_ids,
+            "visual_kit": "matrix_table",
+        }],
+        "omitted_source_blocks": [],
+    }
+
+    class BrokenThenValidLLM:
+        def __init__(self):
+            self.responses = ['{"schema":"storyboard/v1","slides":[]', json.dumps(raw)]
+            self.calls = []
+
+        def chat(self, _messages, *, response_schema=None, **_kwargs):
+            self.calls.append(response_schema)
+            return self.responses.pop(0)
+
+    llm = BrokenThenValidLLM()
+    result = build_storyboard(document, llm_fn=llm)
+
+    assert result["metadata"]["llm"] == "sampled"
+    assert len(llm.calls) == 2
+    assert all(call is STORYBOARD_SCHEMA for call in llm.calls)
 
 
 def test_storyboard_rejects_pages_over_user_budget() -> None:
