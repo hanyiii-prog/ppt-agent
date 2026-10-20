@@ -35,7 +35,7 @@ and stable, so it is implemented directly in `ppt_agent/mcp/`.
 | `initialize` | Agrees on the newest protocol version in `MCP_PROTOCOL_VERSIONS`, returns server info and instructions |
 | `notifications/initialized`, `notifications/cancelled` | Accepted and never answered |
 | `ping` | Returns `{}` |
-| `tools/list` | Returns all 13 tools with JSON Schema input definitions |
+| `tools/list` | Returns all 28 tools with JSON Schema input definitions |
 | `tools/call` | Executes a tool; failures come back as `isError: true` content, not JSON-RPC errors |
 | `notifications/progress` | Emitted during long-running tools when the request supplies `params._meta.progressToken` |
 | `resources/list`, `resources/templates/list`, `prompts/list` | Empty listings (reserved for later use) |
@@ -69,8 +69,8 @@ silently waiting for the final response does not satisfy the progress contract.
 
 ## Tools
 
-All ten of the IR-route tools are thin wrappers over `ppt_agent.sdk.PptAgent`, so the tool surface
-cannot drift from the SDK or the CLI; the clone trio wraps `PptAgent.clone_*` the same way.
+All tools are thin wrappers over `ppt_agent.sdk.PptAgent` or the corresponding pipeline stage, so
+the tool surface cannot drift from the SDK or the CLI.
 
 | Tool | Purpose |
 |---|---|
@@ -87,6 +87,26 @@ cannot drift from the SDK or the CLI; the clone trio wraps `PptAgent.clone_*` th
 | `ppt_agent_clone_plan` | Clone route step 1: shells by role + per-page-kind DNA summaries + valid roles/kits |
 | `ppt_agent_clone_build` | Clone route step 2: render a JSON page plan through the template's own shells, then audit |
 | `ppt_agent_clone_audit` | Clone route step 3: run the six-kind page audit over any deck |
+
+### Audit, fidelity and V3 generation tools
+
+| Tool | Purpose |
+|---|---|
+| `ppt_agent_audit_editability` | Verify that every page exposes native editable content and no screenshot paste |
+| `ppt_agent_fidelity_extract` | Extract hardened OOXML Template DNA for one slide |
+| `ppt_agent_fidelity_diff` | Structural/style diff between a reference and candidate slide |
+| `ppt_agent_fidelity_repair` | Bounded structural fidelity repair loop |
+| `ppt_agent_fidelity_validate` | Structural gate plus rendered visual comparison |
+| `ppt_agent_narrative_plan` | Rules- or model-assisted narrative planning |
+| `ppt_agent_generate` | End-to-end model storyboard → template-aware PPTX → whole-deck gates |
+| `ppt_agent_analyze_sources` | V3 stage 1: source pack and evidence graph |
+| `ppt_agent_plan_outline` | V3 stage 2: provenance-first outline |
+| `ppt_agent_validate_outline` | V3 stage 3: outline and source-coverage validation |
+| `ppt_agent_author_slides` | V3 stage 4: slide specs with evidence IDs |
+| `ppt_agent_list_builtin_templates` | List built-in template profiles |
+| `ppt_agent_select_template` | Choose a user PPTX or score built-in profiles |
+| `ppt_agent_compile_page_design` | V3 stage 5: compile SlideSpecs into Page Design IR |
+| `ppt_agent_evaluate_deck` | Evaluate outline/deck evidence against source coverage and page budget |
 
 ### Typical call sequence
 
@@ -173,8 +193,9 @@ declared visual request fails or returns an invalid review, the Agent also falls
 checks. When no rasteriser is available, the report makes clear that only structural checks ran.
 
 This remains a compatibility path for hosts that expose MCP sampling. Sampling was deprecated in
-the MCP `2026-07-28` protocol revision and remains available during its deprecation window; new
-model integrations should add a direct provider adapter rather than deepen reliance on host sampling.
+the MCP `2026-07-28` protocol revision and remains available during its deprecation window. In
+PPT Agent it is still preferred when available because it uses the host's own model; direct provider
+configuration is used for hosts without sampling.
 The visual critic consumes the provider chat interface, so its review logic can stay independent of
 that transport. See the [MCP deprecation proposal](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/seps/2577-deprecate-roots-sampling-and-logging.md).
 
@@ -184,9 +205,11 @@ The MCP server can also use a directly configured OpenAI Responses-compatible en
 `PPT_AGENT_API_BASE_URL`, `PPT_AGENT_API_KEY`, and `PPT_AGENT_MODEL` in the server process
 environment. `PPT_AGENT_VISION_MODEL` is optional; only set it to a model that accepts image
 inputs. `PPT_AGENT_REASONING_EFFORT` optionally accepts `minimal`, `low`, `medium`, `high`, or
-`xhigh`. A complete direct configuration takes precedence over MCP sampling. A partial or
-invalid direct configuration is disclosed in the pipeline report, after which declared MCP
-sampling remains available as a fallback. Credentials are never copied into reports.
+`xhigh`. A complete direct configuration is used only when the host did not declare MCP sampling;
+declared host sampling always wins. When host sampling is available, a complete fallback chain
+configured through `PPT_AGENT_FALLBACK_API_BASE_URL`, `PPT_AGENT_FALLBACK_API_KEY` and
+`PPT_AGENT_FALLBACK_MODELS` is used after host sampling fails. Credentials are never copied into
+reports.
 
 Example host configuration (inject the secret through the host's environment manager rather than
 placing it in this JSON):
@@ -200,7 +223,9 @@ placing it in this JSON):
       "env": {
         "PPT_AGENT_API_BASE_URL": "https://api.example/v1",
         "PPT_AGENT_MODEL": "your-text-model",
-        "PPT_AGENT_VISION_MODEL": "your-vision-model"
+        "PPT_AGENT_VISION_MODEL": "your-vision-model",
+        "PPT_AGENT_FALLBACK_API_BASE_URL": "https://fallback.example/v1",
+        "PPT_AGENT_FALLBACK_MODELS": "[free]kimi-k3"
       }
     }
   }

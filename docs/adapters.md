@@ -100,7 +100,7 @@ class MyPlatform(HostAdapter):
 | `resolve_path`, `ensure_dir`, `read_text`, `read_json`, `write_text`, `write_json` | `filesystem` | Create parent directories on write |
 | `run(argv)` | `shell` | **Never** uses a shell; a bare string argument raises `TypeError` |
 | `which(executable)` | `shell` | Path lookup |
-| `render_preview(pptx, out)` | `render_preview` | LibreOffice + pdftoppm |
+| `render_preview(pptx, out)` | `render_preview` | PowerPoint/Office-compatible COM or LibreOffice + pdftoppm |
 | `open_preview(path)` | `browser` | Returns `False` by default; hosts override |
 | `convert_with_office(pptx, out, target)` | `office_automation` | Unimplemented in the built-ins by design |
 

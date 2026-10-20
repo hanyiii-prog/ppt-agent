@@ -30,9 +30,25 @@
 - **中文文档：** 当前 README
 - **English:** see the English sections below
 
-## 当前版本：V3.0.0（Provenance-first V3 Pipeline，feature/v2.1-full 分支）
+## 当前版本：V3.1.0（Aesthetic Convergence Pipeline，已合并 main）
 
 V3.0.0 引入 `build-v3` 溯源优先生成链路。它先建立 SourcePack、EvidenceGraph、DeckBrief、Outline、TemplateProfile 和 PageDesignIR，再编译为 PPTX / HTML；输出会保留每个中间契约文件，质量报告说明来源覆盖率、页数一致性和视觉审查是否运行。没有配置模型时自动走保守规则规划；配置模型后，模型规划结果仍要经过本地校验和补齐。
+
+V3.1.0 在这条链路之上补齐了“模型故事板 → 模板组件 → 原生 PPTX → 整册门禁”的执行契约：
+
+- **宿主模型优先**：MCP sampling 可用时优先使用当前 Agent 的模型；直连 Responses API 只在没有宿主 sampling 时使用。`PPT_AGENT_FALLBACK_*` 可配置额外兜底模型链。
+- **模型故事板契约**：`storyboard/v1` 强制 JSON schema，支持 `visual_kit` 别名归一化、`table_row_ranges` 行级拆分和单页异常降级，不再因一页非法 kit 丢弃整册故事板。
+- **模板组件目录**：提供 `template-component-catalog/v1`，把模板中的单页组织图、架构图、时间轴、卡片、KPI、表格等作为可复用组件；故事板可引用 `template_component_id`，构建时保留模板装饰并替换文字槽。
+- **模板优先路由**：有合适模板组件时优先复用模板页；没有候选或文字容量不足时才回退到 `page_kits`，并在报告中披露原因。
+- **整册质量闭环**：每次重建后重新运行整册渲染、页面审计、视觉审查、可编辑性和模板保真门禁；MCP 长任务通过 `notifications/progress` 逐步汇报阶段。
+
+快速使用用户真实模板：
+
+```bash
+ppt-agent build source.md -o workspace --template ./brand.pptx --route clone --max-pages 20
+```
+
+详细契约见 [`docs/v3.1.md`](docs/v3.1.md)。
 
 交付硬规则：所有页面内容必须保持原生可编辑，标题、正文、列表、表格、图表和装饰都不能用模板/参考文件截图替代。图片类资料只作为溯源参考；用户模板中原本继承的 Logo、背景等原生媒体可以保留，但每页仍必须有原生可编辑内容，最终报告会输出 `editability` 检查结果。
 
@@ -44,7 +60,7 @@ ppt-agent build-v3 source.md -o workspace --objective "project progress report" 
 ppt-agent build-v3 source.md -o workspace --template project-progress
 
 # 优先继承用户模板的真实壳层、装饰与主题
-ppt-agent build-v3 source.md -o workspace --template ./brand.pptx
+ppt-agent build source.md -o workspace --template ./brand.pptx --route clone
 
 # 也可以单独调用阶段工具
 ppt-agent analyze-sources source.md -o source-analysis.json
@@ -509,6 +525,7 @@ Agent 平台可以替换，PPT 能力不应该被平台绑死。
 | [`ROADMAP.md`](ROADMAP.md) | 版本进度、渲染器范围、已知限制、契约兼容策略 |
 | [`docs/architecture.md`](docs/architecture.md) | 分层、模块职责、渲染契约、能力降级矩阵 |
 | [`docs/mcp.md`](docs/mcp.md) | MCP server 协议面、工具清单、克隆壳三件套、workspace 边界 |
+| [`docs/v3.1.md`](docs/v3.1.md) | V3.1 模型故事板、模板组件目录、宿主模型链路和质量门禁 |
 | [`docs/adapters.md`](docs/adapters.md) | 能力模型、声明 vs 实际、协商、主机画像 |
 | [`docs/release.md`](docs/release.md) | 发布清单、漂移校验、契约版本变更流程 |
 | [`docs/production-quality-loop.md`](docs/production-quality-loop.md) | 生产质量循环 |
@@ -555,6 +572,12 @@ byte-identical-template route without writing Python.
 
 V3.0.0 adds the `build-v3` provenance-first pipeline: SourcePack → EvidenceGraph → DeckBrief → Outline → TemplateProfile → PageDesignIR → PPTX/HTML, with every contract artifact written to disk and a quality report that discloses source coverage, page consistency and whether visual review actually ran. Rule planning works without a model; model planning remains locally validated.
 
+V3.1.0 adds the aesthetic-convergence contract: a validated model storyboard, host-model-first provider
+selection, a template-component catalog, template-first rendering, row-window table pagination, whole-deck
+quality gates and MCP progress notifications. A template slide selected through `template_component_id`
+keeps its native decorations while writable text slots are replaced; only a missing component or an
+insufficient text-capacity plan falls back to the code-native page kits, with the reason disclosed.
+
 Delivery also enforces a hard editability rule: titles, body text, lists, tables, charts and
 decorations stay native and editable. Screenshots from templates or references may not stand in for
 slide content. Image sources remain reference-only; native template media inherited through a shell
@@ -563,8 +586,9 @@ an `editability` gate.
 
 The same V3 stages are exposed through the SDK, CLI (`analyze-sources`, `plan-outline`,
 `validate-outline`, `author-slides`, `select-template`, `compile-page-design`, `evaluate-deck`)
-and MCP. A user `.pptx` supplied to `build-v3 --template` takes priority and is rendered through
-the CloneShell route, so the real template chrome is inherited rather than approximated by colour.
+and MCP. A user `.pptx` supplied to `build --template` takes priority and is rendered through
+the CloneShell/V3.1 template-component route, so the real template chrome is inherited rather than
+approximated by colour.
 
 V2.0.0 (Fidelity Engine GA, formerly `v1.11-fidelity-engine`) builds the **Fidelity Engine closed loop** — a verifiable,
 iterative pipeline that compares the generated deck against the reference at both structure and

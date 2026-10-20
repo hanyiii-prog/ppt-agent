@@ -13,9 +13,9 @@ Aggregate scores, averages, or a high overall visual score must never hide a fai
 ```text
 Task / Sources
      ↓
-Story + Slide Plan
+storyboard/v1 + template component selection
      ↓
-Universal IR
+template slide reuse or Universal IR / page kits
      ↓
 Build PPTX
      ↓
@@ -29,6 +29,8 @@ Render ALL slides
 │ • geometry / bounds                 │
 │ • zero-size / broken elements       │
 │ • near-blank detection              │
+│ • template layout fidelity          │
+│ • native editability                │
 │ • visual critic                     │
 │ • reference regression (if enabled) │
 └──────────────────┬──────────────────┘
@@ -56,7 +58,20 @@ A local change can create a new failure on another slide. For example, changing 
 
 Repair requests identify the exact page and the evidence for failure. A repair implementation should modify the authoritative source representation (IR, content, template rule, or build configuration) and rebuild the PPTX. It should not silently patch the final PPTX as an untracked artifact.
 
-The current `run_repair_loop()` API provides this orchestration contract. A future generation engine will connect it to the Story/Planner/Renderer/Visual Critic components.
+In V3.1, `run_pipeline()` implements this contract end to end. A failed page is converted into a
+page-scoped repair request; the storyboard repair may change archetype, layout, visual kit or
+template component, but cannot invent facts or change source attribution. The repaired deck is then
+rebuilt and passed through the whole-deck gate again.
+
+## Template-first build
+
+When a template is supplied, V3.1 catalogues its pages before planning. A content page may select
+`template_component_id`; the build keeps that slide's native decorations and replaces only writable
+text slots. This is preferred over redrawing every composition. If no template component fits the
+content, or the component's text capacity is too small, the build falls back to a native page kit
+and records `template_component_fallback_reason`.
+
+Fallback is allowed, but it is never silent.
 
 ## Reference regression
 

@@ -188,6 +188,24 @@ helper.
 - [x] 355 tests green on Python 3.10 / 3.11 / 3.13; `dependency-free-core` import-and-capabilities
       gate passes with no presentation engine installed
 
+## V3.1.0 — Aesthetic convergence (released, main)
+
+V3.1.0 closes the gap between model intent and template execution.
+
+- [x] Model-authored `storyboard/v1` with JSON schema, source-block accounting and single-page
+      kit/layout degradation
+- [x] Visual form and semantic routing into native kits (`matrix_table`, `architecture_layers`,
+      `four_role_cards`, `org_chart`, timelines and cards)
+- [x] 1-based `table_row_ranges` for row-level table pagination
+- [x] `template-component-catalog/v1`, deterministic candidate ranking and template slide reuse
+      with `cleared=False`
+- [x] Template component text-capacity checks with disclosed fallback to native page kits
+- [x] Host MCP sampling first, direct Responses provider only as a fallback, plus an explicit
+      OpenAI-compatible fallback model chain
+- [x] MCP `notifications/progress` for multi-minute generation
+- [x] Whole-deck page, editability, template fidelity and visual gates after repair/rebuild
+- [x] Version promoted `3.0.0` → `3.1.0` across `pyproject.toml` and `ppt_agent.__version__`
+
 ## Renderer v1 scope
 
 The native renderer (`src/ppt_agent/renderer.py`) consumes Universal IR and emits an editable `.pptx`:

@@ -44,6 +44,13 @@ Python import ─┘
 | `ppt_agent.renderers.html` | Visual engine: self-contained printable HTML deck |
 | `ppt_agent.renderers.registry` | Registration, preference order, automatic selection, `render_with` |
 | `ppt_agent.adapters` | Host protocol, capability detection, declarative host profiles |
+| `ppt_agent.llm.provider` | Host MCP sampling, Responses-compatible providers and fallback chains |
+| `ppt_agent.storyboard` | Validated `storyboard/v1`, JSON schema, aliases and row windows |
+| `ppt_agent.agent.pipeline` | End-to-end V3.1 pipeline, provider selection, condensation, repair and gates |
+| `ppt_agent.clone_build` | Template shell/component rendering and clone-route audits |
+| `ppt_agent.template_components` | Template component catalog and deterministic candidate ranking |
+| `ppt_agent.page_kits` | Native editable content kits: cards, org charts, timelines and tables |
+| `ppt_agent.render_real` | PowerPoint/Office-compatible COM and LibreOffice rasterisation |
 | `ppt_agent.mcp` | Dependency-free MCP stdio server and tool surface |
 | `ppt_agent.sdk` | High-level facade used by the CLI, MCP and integrations |
 | `ppt_agent.page_validation` | Geometry / blank-page gates (rendered and structural) |
@@ -90,6 +97,12 @@ After that, `render_presentation(ir, output)` is the single native code path. `N
 `HtmlRenderer` both consume the **same** layout resolved by `styling.resolve_layout()`, so a
 cross-engine comparison compares typography and fidelity, not two divergent layout algorithms.
 Rendering is deterministic: the same IR yields the same shape tree.
+
+The V3.1 clone pipeline has a second, template-first execution path. A validated storyboard can name
+a `template_component_id`; `template_components` ranks catalog candidates and `clone_build` assigns
+the source slide with `cleared=False`, preserves native decorations and replaces only writable text
+slots. If no template component fits, the pipeline falls back to the equivalent native page kit and
+discloses the reason in the build warnings.
 
 Components with `x/y/w/h` (inches) are placed absolutely; components without geometry flow top-down
 from a purpose-dependent cursor. See `ROADMAP.md` for the v1 scope and known limits.
