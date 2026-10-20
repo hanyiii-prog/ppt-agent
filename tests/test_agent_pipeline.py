@@ -101,6 +101,35 @@ def test_pipeline_llm_sampled_end_to_end(tmp_path: Path) -> None:
     assert report["metadata"]["llm"] == "sampled"
 
 
+def test_pipeline_reports_generation_model(tmp_path: Path) -> None:
+    class RecordingProvider:
+        name = "recording"
+        provider_name = "host-qwen"
+        model_name = "qwen3.7-plus"
+        supports_vision = False
+
+        def chat(self, *_args, **_kwargs):
+            return "- 项目概况\n- 项目成效"
+
+    from ppt_agent.llm.provider import llm_fn_from_provider
+
+    report = run_pipeline(
+        SAMPLE,
+        out_dir=tmp_path / "dist-model",
+        llm_fn=llm_fn_from_provider(RecordingProvider()),
+    )
+
+    assert report["metadata"]["generation_provider"] == "host-qwen"
+    assert report["metadata"]["generation_model"] == "qwen3.7-plus"
+
+
+def test_pipeline_reports_host_model_when_name_is_unavailable(tmp_path: Path) -> None:
+    report = run_pipeline(SAMPLE, out_dir=tmp_path / "dist-host", llm_fn=lambda _prompt: "- 项目概况")
+
+    assert report["metadata"]["generation_provider"] == "llm_fn"
+    assert report["metadata"]["generation_model"] == "宿主模型"
+
+
 # ---- content-page integrity (blank control / duplicated heading fixes) ----
 
 _PAIRING_SAMPLE = """# 项目汇报

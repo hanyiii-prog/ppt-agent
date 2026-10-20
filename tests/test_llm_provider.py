@@ -16,6 +16,9 @@ from ppt_agent.llm import (
     MCPSamplingProvider,
     NullProvider,
     RuleFallbackProvider,
+    ChatCompletionsProvider,
+    FallbackProvider,
+    configured_fallback_providers,
     OpenAIResponsesProvider,
     configured_provider,
     llm_fn_from_provider,
@@ -243,6 +246,91 @@ def test_provider_configuration_prefers_direct_and_discloses_incomplete_config()
     assert missing is None
     assert "PPT_AGENT_MODEL" in warning
     assert "fresh-secret" not in warning
+
+
+def test_chat_completions_provider_parses_text_response(monkeypatch) -> None:
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"role": "assistant", "content": "OK"}}]}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["body"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("requests.post", fake_post)
+    provider = ChatCompletionsProvider(
+        "https://fallback.example",
+        "fresh-secret",
+        "[free]kimi-k3",
+    )
+
+    assert provider.chat([ChatMessage("user", "hello")]) == "OK"
+    assert captured["url"] == "https://fallback.example/v1/chat/completions"
+    assert captured["body"]["model"] == "[free]kimi-k3"
+    assert captured["body"]["messages"] == [{"role": "user", "content": "hello"}]
+    assert "fresh-secret" not in repr(provider)
+
+
+def test_fallback_provider_tries_primary_then_free_models() -> None:
+    class FailingProvider:
+        name = "host"
+
+        def chat(self, *_args, **_kwargs):
+            raise LLMUnavailableError("host_down")
+
+    class GoodFallback:
+        name = "free"
+        provider_name = "chat-completions-fallback"
+        model_name = "[free]kimi-k3"
+
+        def chat(self, *_args, **_kwargs):
+            return "fallback"
+
+    provider = FallbackProvider(FailingProvider(), [GoodFallback()])
+    assert provider.chat([ChatMessage("user", "hello")]) == "fallback"
+    assert [item.name for item in provider.fallbacks] == ["free"]
+    assert provider.name == "host+fallback"
+    assert provider.provider_name == "chat-completions-fallback"
+    assert provider.model_name == "[free]kimi-k3"
+
+
+def test_fallback_configuration_supports_multiple_free_models() -> None:
+    environ = {
+        "PPT_AGENT_FALLBACK_API_BASE_URL": "https://fallback.example",
+        "PPT_AGENT_FALLBACK_API_KEY": "fresh-secret",
+        "PPT_AGENT_FALLBACK_MODELS": "[free]kimi-k3, [free]deepseek-v4.1-flash",
+    }
+    providers, warning = configured_fallback_providers(environ)
+
+    assert warning is None
+    assert [provider.model for provider in providers] == [
+        "[free]kimi-k3",
+        "[free]deepseek-v4.1-flash",
+    ]
+    assert all(provider.supports_vision is False for provider in providers)
+
+
+def test_resolve_provider_wraps_host_with_fallbacks(monkeypatch) -> None:
+    session = FakeSession(supported=True, result=_sampling_result("host"))
+    environ = {
+        "PPT_AGENT_FALLBACK_API_BASE_URL": "https://fallback.example",
+        "PPT_AGENT_FALLBACK_API_KEY": "fresh-secret",
+        "PPT_AGENT_FALLBACK_MODELS": "[free]kimi-k3",
+    }
+    monkeypatch.setattr(
+        "ppt_agent.llm.provider.ChatCompletionsProvider",
+        lambda *_args, **_kwargs: NullProvider("fallback"),
+    )
+    provider, warning = resolve_provider(session, environ=environ)
+
+    assert warning is None
+    assert isinstance(provider, FallbackProvider)
+    assert provider.chat([ChatMessage("user", "hello")]) == "host"
 
 
 def test_provider_resolution_uses_sampling_when_direct_configuration_is_partial() -> None:

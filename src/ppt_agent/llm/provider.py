@@ -100,6 +100,14 @@ class MCPSamplingProvider:
         self.session = session
 
     @property
+    def provider_name(self) -> str:
+        return self.name
+
+    @property
+    def model_name(self) -> str:
+        return str(getattr(self.session, "model", "") or "宿主模型")
+
+    @property
     def supports_vision(self) -> bool:
         return getattr(self.session, "vision_supported", None) is True
 
@@ -187,6 +195,14 @@ class OpenAIResponsesProvider:
             raise ValueError("unsupported reasoning_effort")
 
     @property
+    def provider_name(self) -> str:
+        return self.name
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    @property
     def supports_vision(self) -> bool:
         return bool(self.vision_model)
 
@@ -245,6 +261,7 @@ class OpenAIResponsesProvider:
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
+                "User-Agent": "ppt-agent/1.0",
             },
             method="POST",
         )
@@ -356,6 +373,216 @@ def configured_provider(
     return provider, None
 
 
+class ChatCompletionsProvider:
+    """Minimal OpenAI-compatible chat-completions client for fallback models."""
+
+    name = "chat-completions-fallback"
+    supports_vision = False
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        *,
+        timeout_s: float = 90.0,
+    ) -> None:
+        self.endpoint = _chat_completions_endpoint(base_url)
+        self.model = model
+        self._api_key = api_key
+        self.timeout_s = timeout_s
+
+    @property
+    def provider_name(self) -> str:
+        return self.name
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(endpoint={self.endpoint!r}, model={self.model!r}, api_key=<redacted>)"
+
+    def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        system: str | None = None,
+        max_tokens: int = 1024,
+        response_schema: dict[str, Any] | None = None,
+    ) -> str:
+        if any(message.images for message in messages):
+            raise LLMUnavailableError("vision_model_not_configured")
+
+        payload_messages: list[dict[str, str]] = []
+        if system:
+            payload_messages.append({"role": "system", "content": system})
+        for message in messages:
+            if message.content:
+                payload_messages.append({
+                    "role": message.role,
+                    "content": message.content,
+                })
+
+        payload = {
+            "model": self.model,
+            "messages": payload_messages,
+            "max_tokens": max(1, int(max_tokens)),
+        }
+        import requests
+
+        try:
+            response = requests.post(
+                self.endpoint,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "ppt-agent/1.0",
+                },
+                json=payload,
+                timeout=self.timeout_s,
+            )
+            if response.status_code >= 400:
+                raise LLMUnavailableError(f"chat_completions_http_{response.status_code}")
+            result = response.json()
+        except LLMUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- fallback endpoint failures stay sanitized
+            raise LLMUnavailableError(
+                f"chat_completions_transport: {type(exc).__name__}"
+            ) from None
+
+        text = _chat_completions_text(result)
+        if not text:
+            raise LLMUnavailableError("chat_completions_empty_response")
+        return text
+
+
+def _chat_completions_endpoint(base_url: str) -> str:
+    try:
+        parts = urlsplit(str(base_url).strip())
+        if (
+            parts.scheme not in {"https", "http"}
+            or not parts.netloc
+            or parts.username
+            or parts.password
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError
+        if parts.scheme == "http" and parts.hostname not in {
+            "localhost", "127.0.0.1", "::1",
+        }:
+            raise ValueError
+        path = parts.path.rstrip("/")
+        if path.endswith("/chat/completions"):
+            endpoint_path = path
+        elif path.endswith("/v1"):
+            endpoint_path = path + "/chat/completions"
+        elif not path:
+            endpoint_path = "/v1/chat/completions"
+        else:
+            endpoint_path = path + "/v1/chat/completions"
+        return urlunsplit((parts.scheme, parts.netloc, endpoint_path, "", ""))
+    except (TypeError, ValueError):
+        raise ValueError(
+            "fallback base_url must be an HTTPS chat-completions endpoint without embedded credentials"
+        ) from None
+
+
+def _chat_completions_text(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    choices = result.get("choices")
+    if not isinstance(choices, list):
+        return ""
+    first = choices[0] if choices else None
+    message = first.get("message") if isinstance(first, dict) else None
+    text = message.get("content") if isinstance(message, dict) else None
+    return text.strip() if isinstance(text, str) else ""
+
+
+def configured_fallback_providers(
+    environ: dict[str, str] | None = None,
+) -> tuple[list[ChatCompletionsProvider], str | None]:
+    """Read an optional OpenAI-compatible fallback model chain."""
+    environment = os.environ if environ is None else environ
+    names = {
+        "base_url": "PPT_AGENT_FALLBACK_API_BASE_URL",
+        "api_key": "PPT_AGENT_FALLBACK_API_KEY",
+        "models": "PPT_AGENT_FALLBACK_MODELS",
+    }
+    values = {key: str(environment.get(name, "")).strip() for key, name in names.items()}
+    if not any(values.values()):
+        return [], None
+    missing = [names[key] for key in ("base_url", "api_key", "models") if not values[key]]
+    if missing:
+        return [], "兜底模型配置不完整，缺少：" + "、".join(missing)
+    models = [item.strip() for item in values["models"].split(",") if item.strip()]
+    if not models:
+        return [], "兜底模型列表为空"
+    try:
+        providers = [
+            ChatCompletionsProvider(values["base_url"], values["api_key"], model)
+            for model in models
+        ]
+    except (TypeError, ValueError) as exc:
+        return [], f"兜底模型配置无效（{exc}）"
+    return providers, None
+
+
+class FallbackProvider:
+    """Try the primary provider first, then an explicit fallback chain."""
+
+    def __init__(self, primary: LLMProvider, fallbacks: list[LLMProvider] | tuple[LLMProvider, ...]) -> None:
+        self.primary = primary
+        self.fallbacks = tuple(fallbacks)
+        self.name = f"{primary.name}+fallback"
+        self.supports_vision = getattr(primary, "supports_vision", False) is True
+        self._last_provider_name = str(getattr(primary, "provider_name", primary.name))
+        self._last_model_name = str(getattr(primary, "model_name", "") or "宿主模型")
+
+    @property
+    def provider_name(self) -> str:
+        return self._last_provider_name
+
+    @property
+    def model_name(self) -> str:
+        return self._last_model_name
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(primary={self.primary.name!r}, "
+            f"fallbacks={[provider.name for provider in self.fallbacks]})"
+        )
+
+    def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        system: str | None = None,
+        max_tokens: int = 1024,
+        response_schema: dict[str, Any] | None = None,
+    ) -> str:
+        last_error: LLMUnavailableError | None = None
+        candidates = (self.primary, *self.fallbacks)
+        for provider in candidates:
+            try:
+                text = provider.chat(
+                    messages,
+                    system=system,
+                    max_tokens=max_tokens,
+                    response_schema=response_schema,
+                )
+                self._last_provider_name = str(getattr(provider, "provider_name", provider.name))
+                self._last_model_name = str(getattr(provider, "model_name", "") or provider.name)
+                return text
+            except LLMUnavailableError as exc:
+                last_error = exc
+        raise last_error or LLMUnavailableError("fallback_unavailable")
+
+
 def resolve_provider(
     session: Any,
     *,
@@ -370,7 +597,10 @@ def resolve_provider(
     """
     host = select_provider(session)
     if host is not None:
-        return host, None
+        fallbacks, fallback_warning = configured_fallback_providers(environ)
+        if fallbacks:
+            return FallbackProvider(host, fallbacks), fallback_warning
+        return host, fallback_warning
     direct, warning = configured_provider(environ)
     if direct is not None:
         return direct, None

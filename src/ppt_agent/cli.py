@@ -483,6 +483,11 @@ def main() -> int:
                 print(f"DEGRADED: clone route failed and fell back to designed: {fb}")
             if pptx_out:
                 print(f"pptx  : {pptx_out}")
+            metadata = report.get("metadata") or {}
+            print(
+                f"model : {metadata.get('generation_model', '宿主模型')} "
+                f"({metadata.get('generation_provider', 'llm_fn')})"
+            )
             gate = (report.get("gates") or {}).get("delivery") or {}
             if gate and gate.get("passed") is not None:
                 verdict = "PASS" if gate.get("passed") else "FAIL"

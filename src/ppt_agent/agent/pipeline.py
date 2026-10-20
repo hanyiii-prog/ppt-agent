@@ -824,6 +824,29 @@ def _blocks_to_matrix_table(blocks: list) -> dict[str, list[list[str]]]:
     return {"headers": headers, "rows": rows}
 
 
+def _table_rows_for_title(rows: list[list[str]], title: str) -> list[list[str]]:
+    """Keep a storyboard page's declared row window when it is unambiguous."""
+    match = re.search(r"(\d+)\s*[-–—]\s*(\d+)", title or "")
+    if not match:
+        return rows
+    start, end = int(match.group(1)), int(match.group(2))
+    if start > end:
+        return rows
+    numbers: list[int | None] = []
+    for row in rows:
+        try:
+            numbers.append(int(str(row[0]).strip()) if row else None)
+        except ValueError:
+            return rows
+    if any(number is None for number in numbers):
+        return rows
+    return [
+        row
+        for row, number in zip(rows, numbers)
+        if number is not None and start <= number <= end
+    ]
+
+
 _DATE_RE = re.compile(
     r"(20\d{2})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*[日号])?"
     r"|(?<!\d)(20\d{2})[./-](\d{1,2})(?:[./-](\d{1,2}))?"
@@ -861,6 +884,18 @@ def _derive_cover_meta(document) -> str:
                 parts.append(day + "日")
             return "".join(parts)
     return ""
+
+
+def _generation_identity(llm_fn: Callable[[str], str] | None) -> tuple[str, str]:
+    """Expose which model actually generated the deck, without leaking keys."""
+    provider = getattr(llm_fn, "provider", None)
+    provider_name = str(getattr(provider, "provider_name", "") or getattr(provider, "name", "") or "llm_fn")
+    model_name = str(
+        getattr(provider, "model_name", "")
+        or getattr(provider, "model", "")
+        or "宿主模型"
+    )
+    return provider_name, model_name
 
 
 def _page_item_count(blocks: list[Any]) -> int:
@@ -1131,9 +1166,12 @@ def _plan_to_clone_pages(
                 spec["cards"] = _blocks_to_role_cards(blocks)
             elif kit == "matrix_table":
                 table_contract = _blocks_to_matrix_table(blocks)
+                selected_rows = _table_rows_for_title(
+                    table_contract["rows"], page_title,
+                )
                 row_chunks = [
-                    table_contract["rows"][start:start + 10]
-                    for start in range(0, len(table_contract["rows"]), 10)
+                    selected_rows[start:start + 10]
+                    for start in range(0, len(selected_rows), 10)
                 ] or [[]]
                 if len(row_chunks) == 1:
                     spec["table"] = {"headers": table_contract["headers"], "rows": row_chunks[0]}
@@ -1729,6 +1767,10 @@ def run_pipeline(
             "llm": narrative["metadata"]["llm"],
             "storyboard_llm": storyboard_result["metadata"]["llm"],
             "pipeline": f"{route}+{plan_source}",
+            **dict(zip(
+                ("generation_provider", "generation_model"),
+                _generation_identity(llm_fn),
+            )),
         },
     }
 
